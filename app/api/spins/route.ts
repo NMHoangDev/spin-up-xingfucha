@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
       {
         error: "Firebase Admin not configured or request failed",
         detail,
-        hint: "Firebase Admin credentials are hardcoded. Check `lib/firebase/admin.ts` and ensure the service account JSON file exists in the project root.",
+        hint: "Firebase Admin credentials are hardcoded as strings. Check `lib/firebase/admin.ts`.",
       },
       { status: 500 },
     );

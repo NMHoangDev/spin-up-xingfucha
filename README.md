@@ -26,6 +26,6 @@ This app persists spin records to Firestore and displays them at `/admin`.
 
 Configuration is hardcoded (no `.env` / no environment variables):
 - Firebase Web config is in `lib/firebase/client.ts`
-- Firebase Admin (server) reads the service account JSON from the project root via `lib/firebase/admin.ts`
+- Firebase Admin (server) is hardcoded as strings in `lib/firebase/admin.ts`
 
 Ensure Firestore is enabled in your Firebase project.
