@@ -95,23 +95,23 @@ export default function AdminPage() {
     setExporting(true);
     setError(null);
     try {
-      const res = await fetch('/api/export');
+      const res = await fetch("/api/export");
       if (!res.ok) {
         const txt = await res.text();
-        throw new Error(txt || 'Export failed');
+        throw new Error(txt || "Export failed");
       }
 
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
-      a.download = 'spin-report.xlsx';
+      a.download = "spin-report.xlsx";
       document.body.appendChild(a);
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (e: any) {
-      setError(e?.message ?? 'Export failed');
+      setError(e?.message ?? "Export failed");
     } finally {
       setExporting(false);
     }
@@ -136,7 +136,7 @@ export default function AdminPage() {
               className="h-10 px-4 rounded-lg border border-gray-300 bg-white"
               disabled={exporting}
             >
-              {exporting ? 'Đang export...' : 'Export Excel'}
+              {exporting ? "Đang export..." : "Export Excel"}
             </button>
             <input
               value={search}
