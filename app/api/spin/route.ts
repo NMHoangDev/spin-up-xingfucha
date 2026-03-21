@@ -4,6 +4,13 @@ import { getDb } from "@/lib/firebase/admin";
 import { REWARDS } from "@/lib/rewards/rewards";
 import { selectWeightedReward } from "@/lib/rewards/reward.service";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function isDebugEnabled() {
+  return process.env.DEBUG_API_ERRORS === "1" || process.env.NODE_ENV !== "production";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -43,8 +50,21 @@ export async function POST(req: NextRequest) {
       reward: reward,
     });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error("POST /api/spin failed:", { detail, stack });
+
+    const debug = isDebugEnabled();
     return NextResponse.json(
-      { error: "Internal Server Error" },
+      {
+        error: "Internal Server Error",
+        ...(debug
+          ? {
+              detail,
+              hint: "If this is a Firebase Admin error on Vercel, set FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 (recommended) or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY and redeploy.",
+            }
+          : {}),
+      },
       { status: 500 },
     );
   }

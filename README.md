@@ -15,20 +15,17 @@ View your app in AI Studio: https://ai.studio/apps/e60509fe-9ef0-403b-9eea-413c8
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Run the app:
    `npm run dev`
 
 ## Firebase (Spin records + Admin)
 
 This app can persist spin records to Firestore and display them at `/admin`.
 
-1. Install deps:
-   `npm install`
-2. Create `.env.local` from `.env.example` and fill:
-   - `NEXT_PUBLIC_FIREBASE_*` (Firebase Web App config)
-   - `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (Service Account)
-3. Ensure Firestore is enabled in your Firebase project.
+This app persists spin records to Firestore and displays them at `/admin`.
 
-Notes:
-- `FIREBASE_PRIVATE_KEY` should be stored on ONE line with `\n` escapes in `.env.local`.
+Configuration is hardcoded (no `.env` / no environment variables):
+- Firebase Web config is in `lib/firebase/client.ts`
+- Firebase Admin (server) reads the service account JSON from the project root via `lib/firebase/admin.ts`
+
+Ensure Firestore is enabled in your Firebase project.

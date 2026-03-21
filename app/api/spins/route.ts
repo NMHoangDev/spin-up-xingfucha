@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase/admin";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 function toInt(value: string | null, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -87,7 +90,7 @@ export async function GET(req: NextRequest) {
       {
         error: "Firebase Admin not configured or request failed",
         detail,
-        hint: "Create .env.local and set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY; then restart `npm run dev`.",
+        hint: "Firebase Admin credentials are hardcoded. Check `lib/firebase/admin.ts` and ensure the service account JSON file exists in the project root.",
       },
       { status: 500 },
     );
