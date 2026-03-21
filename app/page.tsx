@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import Image from "next/image";
 import {
   Gift,
   Phone,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { REWARDS, type Reward } from "@/lib/rewards/rewards";
+import logoJpg from "@/assets/logo.jpg";
 
 // --- Types ---
 
@@ -27,30 +29,20 @@ interface UserInfo {
 // --- Components ---
 
 const Logo = ({ className = "w-10 h-10" }: { className?: string }) => (
-  <div className={`relative flex items-center justify-center ${className}`}>
-    <motion.div
-      animate={{ rotate: [0, 5, -5, 0] }}
-      transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-      className="absolute inset-0 bg-red-600 rounded-full shadow-lg"
+  <motion.div
+    animate={{ rotate: [0, 2, -2, 0] }}
+    transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+    className={`relative ${className} rounded-full overflow-hidden bg-white shadow-lg ring-2 ring-white`}
+  >
+    <Image
+      src={logoJpg}
+      alt="XingFuCha logo"
+      fill
+      sizes="128px"
+      priority
+      className="object-cover"
     />
-    <svg
-      viewBox="0 0 100 100"
-      className="relative z-10 w-3/4 h-3/4 fill-yellow-100"
-    >
-      {/* Paw Print Shape */}
-      <circle cx="50" cy="65" r="20" />
-      <circle cx="30" cy="45" r="10" />
-      <circle cx="45" cy="35" r="10" />
-      <circle cx="65" cy="38" r="10" />
-      <circle cx="75" cy="55" r="10" />
-      {/* Sparkles */}
-      <path d="M20 20 L22 25 L27 27 L22 29 L20 34 L18 29 L13 27 L18 25 Z" />
-      <path
-        d="M85 25 L87 30 L92 32 L87 34 L85 39 L83 34 L78 32 L83 30 Z"
-        className="opacity-70"
-      />
-    </svg>
-  </div>
+  </motion.div>
 );
 
 const Modal = ({
@@ -279,7 +271,7 @@ export default function XingFuChaLanding() {
           className="mb-8"
         >
           <div className="bg-white px-6 py-3 rounded-full shadow-xl border border-red-50 flex items-center gap-3">
-            <Logo className="w-10 h-10" />
+            <Logo className="w-12 h-12 md:w-14 md:h-14" />
             <div className="flex flex-col leading-none">
               <span className="font-black text-2xl tracking-tighter text-gray-900">
                 XingFuCha
