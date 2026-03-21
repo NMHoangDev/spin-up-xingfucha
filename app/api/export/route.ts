@@ -8,13 +8,13 @@ export const dynamic = "force-dynamic";
 
 const TITLE = "TỔNG HỢP SỐ LƯỢNG QUAY SPIN UP TẠI XING FUCHA";
 
-type SpinResult = {
+type SpinDoc = {
   name?: unknown;
   phone?: unknown;
   rewardLabel?: unknown;
   rewardCode?: unknown;
-  spinCount?: unknown;
   createdAt?: unknown;
+  status?: unknown;
 };
 
 type UserAggregate = {
@@ -32,12 +32,6 @@ function normalizePhone(v: unknown): string {
   return normalizeString(v);
 }
 
-function normalizeSpinCount(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  if (!Number.isFinite(n)) return 1;
-  return Math.max(1, Math.floor(n));
-}
-
 function addToMap(map: Map<string, number>, key: string, inc: number) {
   map.set(key, (map.get(key) ?? 0) + inc);
 }
@@ -48,13 +42,13 @@ function rewardSummary(rewards: Map<string, number>): string {
   return entries.map(([label, count]) => `${label} (${count})`).join(", ");
 }
 
-async function fetchAllSpinResults(): Promise<SpinResult[]> {
+async function fetchAllSpins(): Promise<SpinDoc[]> {
   const db = getDb();
-  const snap = await db.collection("spin_results").get();
-  return snap.docs.map((d: any) => d.data() as SpinResult);
+  const snap = await db.collection("spins").get();
+  return snap.docs.map((d: any) => d.data() as SpinDoc);
 }
 
-function aggregateSpinResults(docs: SpinResult[]) {
+function aggregateSpins(docs: SpinDoc[]) {
   const byPhone = new Map<string, UserAggregate>();
   const globalRewards = new Map<string, number>();
 
@@ -66,9 +60,8 @@ function aggregateSpinResults(docs: SpinResult[]) {
 
     const name = normalizeString(d.name);
     const rewardLabel = normalizeString(d.rewardLabel) || "(Unknown)";
-    const spins = normalizeSpinCount(d.spinCount);
-
-    totalSpins += spins;
+    const spins = 1;
+    totalSpins += 1;
 
     let agg = byPhone.get(phone);
     if (!agg) {
@@ -132,8 +125,8 @@ function styleBodyRow(row: ExcelJS.Row) {
 }
 
 async function buildWorkbook() {
-  const docs = await fetchAllSpinResults();
-  const { users, items, summary } = aggregateSpinResults(docs);
+  const docs = await fetchAllSpins();
+  const { users, items, summary } = aggregateSpins(docs);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Spin Report");
@@ -144,6 +137,9 @@ async function buildWorkbook() {
     { key: "spins", width: 12 },
     { key: "items", width: 60 },
   ];
+
+  // Keep phone numbers as text to avoid losing leading zeros.
+  ws.getColumn(2).numFmt = "@";
 
   // Title
   ws.mergeCells("A1:D1");
@@ -168,7 +164,12 @@ async function buildWorkbook() {
   let rowIndex = headerRowIndex + 1;
   for (const u of users) {
     const r = ws.getRow(rowIndex++);
-    r.values = [u.name, u.phone, u.totalSpins, rewardSummary(u.rewards)];
+    r.values = [
+      u.name,
+      String(u.phone),
+      u.totalSpins,
+      rewardSummary(u.rewards),
+    ];
     styleBodyRow(r);
   }
 
@@ -208,9 +209,6 @@ async function buildWorkbook() {
     r.values = [it.label, it.count];
     r.alignment = { vertical: "middle", horizontal: "left" };
   }
-
-  // Make sure rows are committed
-  ws.eachRow((r) => r.commit());
 
   return wb;
 }
