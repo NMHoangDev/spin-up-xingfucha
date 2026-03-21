@@ -1,0 +1,11 @@
+node_modules/
+.next/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Firebase Admin SDK service account keys (DO NOT COMMIT)
+*-firebase-adminsdk-*.json
+**/*-firebase-adminsdk-*.json
