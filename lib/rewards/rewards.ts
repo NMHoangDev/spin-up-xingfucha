@@ -5,39 +5,39 @@ export type Reward = {
   label: string;
   type: RewardType;
   code?: string;
-  /** Relative probability weight. Rewards with weight <= 0 are excluded. */
+  icon: "voucher" | "topping" | "discount" | "combo";
   weight: number;
 };
 
-/**
- * Single source of truth for rewards used by both the UI wheel and the backend.
- * Adjust weights to match your intended distribution.
- */
 export const REWARDS: Reward[] = [
-  { id: 0, label: "Voucher 5%", type: "voucher", code: "XFC5OFF", weight: 30 },
-  { id: 1, label: "Xing Fan", type: "item", weight: 8 },
+  {
+    id: 0,
+    label: "Topping bất kỳ",
+    type: "item",
+    icon: "topping",
+    weight: 25,
+  },
+  {
+    id: 1,
+    label: "1 Trà sữa bất kỳ (M)",
+    type: "item",
+    icon: "combo",
+    weight: 25,
+  },
   {
     id: 2,
-    label: "Voucher 10%",
+    label: "1 Nước dừa bất kỳ (L)",
     type: "voucher",
-    code: "XFC10OFF",
-    weight: 20,
+    code: "NUOCDUA-L",
+    icon: "discount",
+    weight: 25,
   },
-  { id: 3, label: "Water Bottle", type: "item", weight: 6 },
   {
-    id: 4,
-    label: "Voucher 20%",
+    id: 3,
+    label: "1 Trà trái cây bất kỳ (L)",
     type: "voucher",
-    code: "XFC20OFF",
-    weight: 10,
-  },
-  { id: 5, label: "Cooling Fan", type: "item", weight: 4 },
-  { id: 6, label: "Free Upgrade", type: "item", weight: 12 },
-  {
-    id: 7,
-    label: "Voucher 10%",
-    type: "voucher",
-    code: "XFC10OFF",
-    weight: 10,
+    code: "TRA-TRAI-CAY-L",
+    icon: "voucher",
+    weight: 25,
   },
 ];
