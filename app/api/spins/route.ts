@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/firebase/admin";
+
+import { consumeRewardByPhoneAndRewardId, listSpinRecords, updateSpinStatus } from "@/lib/spins/store";
+import { consumeRewardFirebase } from "@/lib/spins/firebase-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function shouldUseFirebaseBackend() {
+  return process.env.SPIN_DATA_BACKEND === "firebase";
+}
+
 function toInt(value: string | null, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function timestampToIso(value: any): string | null {
-  if (!value) return null;
-  if (typeof value === "string") return value;
-  if (value?.toDate) return value.toDate().toISOString();
-  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -22,76 +21,23 @@ export async function GET(req: NextRequest) {
     const page = toInt(searchParams.get("page"), 1);
     const limit = Math.min(toInt(searchParams.get("limit"), 10), 100);
     const search = (searchParams.get("search") ?? "").trim();
-    const type = (searchParams.get("type") ?? "all").trim();
+    const type = (searchParams.get("type") ?? "all").trim() as
+      | "all"
+      | "voucher"
+      | "item";
 
-    const db = getDb();
-    let query = db.collection("spins").orderBy("createdAt", "desc");
-    if (type && type !== "all") {
-      query = query.where("rewardType", "==", type);
-    }
-
-    let total: number | null = null;
-    try {
-      const countSnap = await query.count().get();
-      total = countSnap.data().count as number;
-    } catch {
-      total = null;
-    }
-
-    const offset = (page - 1) * limit;
-    const fetchLimit = Math.max(limit + offset, 200);
-    const snap = await query.limit(fetchLimit).get();
-
-    type SpinRow = {
-      id: string;
-      name: string;
-      phone: string;
-      rewardCode: string;
-      rewardLabel: string;
-      rewardType: string;
-      createdAt: string | null;
-      status: "used" | "unused";
-    };
-
-    let rows: SpinRow[] = snap.docs.map((doc: any) => {
-      const data = doc.data() as any;
-      return {
-        id: doc.id,
-        name: data.name ?? "",
-        phone: data.phone ?? "",
-        rewardCode: data.rewardCode ?? "",
-        rewardLabel: data.rewardLabel ?? "",
-        rewardType: data.rewardType ?? "",
-        createdAt: timestampToIso(data.createdAt),
-        status: (data.status === "used" ? "used" : "unused") as
-          | "used"
-          | "unused",
-      };
+    const { data, total } = await listSpinRecords({
+      page,
+      limit,
+      search,
+      type,
     });
 
-    if (search) {
-      const lowered = search.toLowerCase();
-      rows = rows.filter(
-        (r: SpinRow) =>
-          r.phone.includes(search) || r.name.toLowerCase().includes(lowered),
-      );
-    }
-
-    const data = rows.slice(offset, offset + limit);
-
-    return NextResponse.json({
-      data,
-      total: total ?? rows.length,
-    });
+    return NextResponse.json({ data, total });
   } catch (error) {
-    console.error(error);
     const detail = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      {
-        error: "Firebase Admin not configured or request failed",
-        detail,
-        hint: "Firebase Admin credentials are hardcoded as strings. Check `lib/firebase/admin.ts`.",
-      },
+      { error: "Failed to fetch spins", detail },
       { status: 500 },
     );
   }
@@ -100,7 +46,34 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, status } = body as { id?: string; status?: "used" | "unused" };
+    const { id, status, phone, rewardId, action } = body as {
+      id?: string;
+      status?: "used" | "unused";
+      phone?: string;
+      rewardId?: number;
+      action?: "consume-one";
+    };
+
+    if (action === "consume-one") {
+      const updated = shouldUseFirebaseBackend()
+        ? await consumeRewardFirebase({
+            phone: String(phone ?? ""),
+            rewardId: Number(rewardId ?? -1),
+          })
+        : await consumeRewardByPhoneAndRewardId({
+            phone: String(phone ?? ""),
+            rewardId: Number(rewardId ?? -1),
+          });
+
+      if (!updated) {
+        return NextResponse.json(
+          { error: "Không tìm thấy voucher khả dụng để sử dụng." },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ success: true, data: updated });
+    }
 
     if (!id || (status !== "used" && status !== "unused")) {
       return NextResponse.json(
@@ -109,14 +82,41 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const db = getDb();
-    await db.collection("spins").doc(id).update({ status });
-    return NextResponse.json({ success: true });
+    const updated = await updateSpinStatus({ id, status });
+    if (!updated) {
+      return NextResponse.json({ error: "Spin not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, data: updated });
   } catch (error) {
-    console.error(error);
     const detail = error instanceof Error ? error.message : String(error);
+
+    if (detail === "VOUCHER_NOT_ACTIVE") {
+      return NextResponse.json(
+        { error: "Voucher này chưa tới thời gian được phép sử dụng." },
+        { status: 409 },
+      );
+    }
+
+    if (detail === "REWARD_DAILY_USAGE_LIMIT") {
+      return NextResponse.json(
+        {
+          error:
+            "Khách hàng này đã dùng 1 phần thưởng trong hôm nay, chưa thể dùng thêm phần thưởng khác.",
+        },
+        { status: 409 },
+      );
+    }
+
+    if (detail === "FIREBASE_ADMIN_NOT_CONFIGURED") {
+      return NextResponse.json(
+        { error: "Firebase admin chưa được cấu hình." },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json(
-      { error: "Firebase Admin not configured or request failed", detail },
+      { error: "Failed to update spin", detail },
       { status: 500 },
     );
   }

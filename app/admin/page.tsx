@@ -12,12 +12,19 @@ type SpinRecord = {
   rewardLabel: string;
   rewardType: string;
   createdAt: string | null;
+  voucherUsableFrom: string | null;
+  voucherDelayMinutes: number;
   status: SpinStatus;
+  isVoucherActive: boolean;
 };
 
 type SpinsResponse = {
   data: SpinRecord[];
   total: number;
+};
+
+type SettingsResponse = {
+  voucherActivationDelayMinutes: number;
 };
 
 function formatDate(iso: string | null) {
@@ -29,16 +36,23 @@ function formatDate(iso: string | null) {
   }
 }
 
+function parseNonNegativeInt(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+}
+
 export default function AdminPage() {
   const [rows, setRows] = useState<SpinRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [search, setSearch] = useState("");
   const [type, setType] = useState<"all" | "voucher" | "item">("all");
+  const [voucherDelayMinutes, setVoucherDelayMinutes] = useState(0);
 
   const [total, setTotal] = useState(0);
 
@@ -72,8 +86,21 @@ export default function AdminPage() {
     }
   }
 
+  async function loadSettings() {
+    try {
+      const res = await fetch("/api/settings");
+      if (!res.ok) throw new Error("Failed to fetch settings");
+
+      const json = (await res.json()) as SettingsResponse;
+      setVoucherDelayMinutes(json.voucherActivationDelayMinutes ?? 0);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to fetch settings");
+    }
+  }
+
   useEffect(() => {
     void load();
+    void loadSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, limit, type]);
 
@@ -84,10 +111,37 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status: "used" }),
       });
-      if (!res.ok) throw new Error("Failed to update");
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error ?? "Failed to update");
+      }
       await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to update");
+    }
+  }
+
+  async function saveSettings() {
+    setSavingSettings(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          voucherActivationDelayMinutes: voucherDelayMinutes,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error ?? "Failed to save settings");
+      }
+      setVoucherDelayMinutes(json.voucherActivationDelayMinutes ?? 0);
+      await load();
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to save settings");
+    } finally {
+      setSavingSettings(false);
     }
   }
 
@@ -175,6 +229,40 @@ export default function AdminPage() {
           </div>
         )}
 
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">
+                Cấu hình kích hoạt voucher
+              </h2>
+              <p className="text-sm text-gray-600">
+                Voucher quay trúng sẽ chỉ dùng được sau khoảng thời gian admin
+                thiết lập.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <input
+                type="number"
+                min={0}
+                value={voucherDelayMinutes}
+                onChange={(e) =>
+                  setVoucherDelayMinutes(parseNonNegativeInt(e.target.value))
+                }
+                className="h-10 w-40 rounded-lg border border-gray-300 bg-white px-3"
+              />
+              <span className="text-sm text-gray-600">phút</span>
+              <button
+                onClick={() => void saveSettings()}
+                className="h-10 rounded-lg bg-gray-900 px-4 text-white disabled:opacity-50"
+                disabled={savingSettings}
+              >
+                {savingSettings ? "Đang lưu..." : "Lưu cấu hình"}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div className="mt-6 bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="overflow-auto">
             <table className="w-full text-sm">
@@ -185,6 +273,7 @@ export default function AdminPage() {
                   <th className="text-left px-4 py-3">Quà</th>
                   <th className="text-left px-4 py-3">Mã</th>
                   <th className="text-left px-4 py-3">Thời gian</th>
+                  <th className="text-left px-4 py-3">Hiệu lực từ</th>
                   <th className="text-left px-4 py-3">Trạng thái</th>
                   <th className="text-left px-4 py-3">Thao tác</th>
                 </tr>
@@ -203,6 +292,11 @@ export default function AdminPage() {
                     <td className="px-4 py-3 text-gray-700">
                       {formatDate(r.createdAt)}
                     </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      {r.rewardType === "voucher"
+                        ? formatDate(r.voucherUsableFrom)
+                        : "Dùng ngay"}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={
@@ -213,14 +307,27 @@ export default function AdminPage() {
                       >
                         {r.status === "used" ? "Đã dùng" : "Chưa dùng"}
                       </span>
+                      {r.rewardType === "voucher" &&
+                        r.status !== "used" &&
+                        !r.isVoucherActive && (
+                          <div className="mt-1 text-xs text-amber-700">
+                            Chưa tới thời gian sử dụng
+                          </div>
+                        )}
                     </td>
                     <td className="px-4 py-3">
                       <button
                         className="h-9 px-3 rounded-lg border border-gray-300 bg-white disabled:opacity-50"
-                        disabled={loading || r.status === "used"}
+                        disabled={
+                          loading ||
+                          r.status === "used" ||
+                          (r.rewardType === "voucher" && !r.isVoucherActive)
+                        }
                         onClick={() => void markUsed(r.id)}
                       >
-                        Đánh dấu đã dùng
+                        {r.rewardType === "voucher" && !r.isVoucherActive
+                          ? "Chưa đến hạn"
+                          : "Đánh dấu đã dùng"}
                       </button>
                     </td>
                   </tr>
@@ -230,7 +337,7 @@ export default function AdminPage() {
                   <tr>
                     <td
                       className="px-4 py-8 text-center text-gray-500"
-                      colSpan={7}
+                      colSpan={8}
                     >
                       Không có dữ liệu.
                     </td>

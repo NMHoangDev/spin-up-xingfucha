@@ -18,14 +18,18 @@ View your app in AI Studio: https://ai.studio/apps/e60509fe-9ef0-403b-9eea-413c8
 2. Run the app:
    `npm run dev`
 
-## Firebase (Spin records + Admin)
+## MySQL (Spin records + Admin)
 
-This app can persist spin records to Firestore and display them at `/admin`.
+This app now persists spin records to MySQL and displays them at `/admin`.
 
-This app persists spin records to Firestore and displays them at `/admin`.
+Setup:
 
-Configuration is hardcoded (no `.env` / no environment variables):
-- Firebase Web config is in `lib/firebase/client.ts`
-- Firebase Admin (server) is hardcoded as strings in `lib/firebase/admin.ts`
+1. Copy `.env.example` to `.env.local` and fill in your MySQL connection.
+2. Run `database/mysql-schema.sql` on your MySQL server.
+3. Run `npm run dev`.
 
-Ensure Firestore is enabled in your Firebase project.
+Notes:
+- `app/api/spin`, `app/api/spins`, `app/api/settings`, and `app/api/export` all use MySQL.
+- Admin can set the voucher activation delay in minutes at `/admin`.
+- Each voucher spin stores its own `voucher_usable_from`, so changing the admin setting only affects future spins.
+- Client-side Firebase remains optional and is only used for analytics in `lib/firebase/client.ts`.

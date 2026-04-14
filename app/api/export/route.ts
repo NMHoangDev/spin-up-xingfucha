@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
-import { getDb } from "@/lib/firebase/admin";
+import { getAllSpinRecords } from "@/lib/spins/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,9 +43,15 @@ function rewardSummary(rewards: Map<string, number>): string {
 }
 
 async function fetchAllSpins(): Promise<SpinDoc[]> {
-  const db = getDb();
-  const snap = await db.collection("spins").get();
-  return snap.docs.map((d: any) => d.data() as SpinDoc);
+  const rows = await getAllSpinRecords();
+  return rows.map((row) => ({
+    name: row.name,
+    phone: row.phone,
+    rewardLabel: row.rewardLabel,
+    rewardCode: row.rewardCode,
+    createdAt: row.createdAt,
+    status: row.status,
+  }));
 }
 
 function aggregateSpins(docs: SpinDoc[]) {

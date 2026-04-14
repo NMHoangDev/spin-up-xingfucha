@@ -1,210 +1,379 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import FingerprintJS from "@fingerprintjs/fingerprintjs";
+import { AnimatePresence, motion } from "motion/react";
+import confetti from "canvas-confetti";
 import {
+  ChevronRight,
   Gift,
+  Lock,
   Phone,
+  ShieldCheck,
+  Sparkles,
   User,
   X,
-  Share2,
-  Ticket,
-  Star,
-  ChevronRight,
 } from "lucide-react";
-import confetti from "canvas-confetti";
-import { REWARDS, type Reward } from "@/lib/rewards/rewards";
+
 import logoJpg from "@/assets/logo.jpg";
+import { REWARDS, type Reward } from "@/lib/rewards/rewards";
 
-// --- Types ---
+type UserInfo = { name: string; phone: string };
+type ActiveTab = "spin" | "rewards";
+type SpinReward = Reward & {
+  voucherDelayMinutes?: number;
+  voucherUsableFrom?: string | null;
+  voucherExpiresAt?: string | null;
+};
+type WalletItem = SpinReward & {
+  quantity: number;
+  lastWonAt: string;
+  firstWonAt: string;
+};
+type WalletStore = {
+  items: WalletItem[];
+  updatedAt: string;
+};
 
-interface UserInfo {
+type SavedProfile = {
   name: string;
   phone: string;
+};
+type DailyQuotaStore = {
+  day: string;
+  spinsUsedToday: number;
+  maxSpinsToday: number;
+  globalClosed: boolean;
+};
+
+const WALLET_KEY = "xfc-wallet-v2";
+const DAILY_QUOTA_KEY = "xfc-daily-quota-v2";
+const ACTIVE_TAB_KEY = "xfc-active-tab-v1";
+const PROFILE_KEY = "xfc-profile-v1";
+const DAILY_USAGE_KEY = "xfc-daily-usage-v1";
+const CHANNEL_KEY = "xfc-spin-sync-v2";
+const WALLET_COOKIE = "xfc_wallet_summary";
+
+const rewardVisuals: Record<
+  number,
+  { icon: string; accent: string; soft: string }
+> = {
+  0: { icon: "🧋", accent: "#b45309", soft: "#fef3c7" },
+  1: { icon: "🥤", accent: "#b91c1c", soft: "#fee2e2" },
+  2: { icon: "🥥", accent: "#9a3412", soft: "#ffedd5" },
+  3: { icon: "🍋", accent: "#4d7c0f", soft: "#ecfccb" },
+};
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-// Reward type imported from shared source of truth in lib/rewards.
+function formatTime(value?: string | null) {
+  if (!value) return null;
+  try {
+    return new Date(value).toLocaleString("vi-VN");
+  } catch {
+    return value;
+  }
+}
 
-// --- Components ---
+function readJson<T>(key: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
 
-const Logo = ({ className = "w-10 h-10" }: { className?: string }) => (
-  <motion.div
-    animate={{ rotate: [0, 2, -2, 0] }}
-    transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-    className={`relative ${className} rounded-full overflow-hidden bg-white shadow-lg ring-2 ring-white`}
-  >
-    <Image
-      src={logoJpg}
-      alt="XingFuCha logo"
-      fill
-      sizes="128px"
-      priority
-      className="object-cover"
-    />
-  </motion.div>
-);
+function readQuota(): DailyQuotaStore | null {
+  const stored = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
+  if (!stored) return null;
+  return stored.day === todayKey() ? stored : null;
+}
 
-const Modal = ({
-  isOpen,
-  onClose,
-  children,
-  title,
+function readUsedRewardToday() {
+  const stored = readJson<{ day: string; used: boolean }>(DAILY_USAGE_KEY);
+  return stored?.day === todayKey() ? Boolean(stored.used) : false;
+}
+
+function writeWalletCookie(items: WalletItem[]) {
+  if (typeof document === "undefined") return;
+  const summary = items.map((item) => `${item.id}:${item.quantity}`).join(",");
+  document.cookie = `${WALLET_COOKIE}=${encodeURIComponent(summary)}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
+}
+
+function RewardIcon({
+  rewardId,
+  size = "md",
 }: {
-  isOpen: boolean;
-  onClose?: () => void;
-  children: React.ReactNode;
+  rewardId: number;
+  size?: "sm" | "md" | "lg";
+}) {
+  const visual = rewardVisuals[rewardId] ?? rewardVisuals[0]!;
+  const classes =
+    size === "sm"
+      ? "h-10 w-10 text-lg"
+      : size === "lg"
+        ? "h-16 w-16 text-3xl"
+        : "h-12 w-12 text-2xl";
+
+  return (
+    <div
+      className={`flex items-center justify-center rounded-2xl border border-white/80 shadow-sm ${classes}`}
+      style={{ backgroundColor: visual.soft, color: visual.accent }}
+    >
+      {visual.icon}
+    </div>
+  );
+}
+
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
   title?: string;
-}) => (
-  <AnimatePresence>
-    {isOpen && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          onClick={onClose}
-        />
-        <motion.div
-          initial={{ scale: 0.9, opacity: 0, y: 20 }}
-          animate={{ scale: 1, opacity: 1, y: 0 }}
-          exit={{ scale: 0.9, opacity: 0, y: 20 }}
-          className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden"
-        >
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X size={24} />
-            </button>
-          )}
-          <div className="p-8">
+  children: React.ReactNode;
+  onClose?: () => void;
+}) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div
+            className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+          <motion.div
+            className="relative z-10 w-full max-w-sm rounded-[28px] bg-white p-6 shadow-2xl"
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 18, scale: 0.96 }}
+          >
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="absolute right-4 top-4 rounded-full bg-gray-100 p-2 text-gray-500"
+              >
+                <X size={18} />
+              </button>
+            )}
             {title && (
-              <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+              <h3 className="mb-5 text-center text-2xl font-extrabold text-[#8f111a]">
                 {title}
               </h3>
             )}
             {children}
-          </div>
-        </motion.div>
-      </div>
-    )}
-  </AnimatePresence>
-);
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
 
-const SpinWheel = ({
-  onSpinComplete,
-  isSpinning,
-  rotation,
-}: {
-  onSpinComplete: () => void;
-  isSpinning: boolean;
-  rotation: number;
-}) => {
-  const wheelRef = useRef<HTMLDivElement>(null);
+export default function Page() {
+  const [activeTab, setActiveTab] = useState<ActiveTab>("spin");
+  const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "" });
+  const [wallet, setWallet] = useState<WalletStore>({
+    items: [],
+    updatedAt: "",
+  });
+  const [quota, setQuota] = useState<DailyQuotaStore | null>(null);
+  const [usedRewardToday, setUsedRewardToday] = useState(false);
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+  const [fingerprintReady, setFingerprintReady] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [duration, setDuration] = useState(5200);
+  const [formError, setFormError] = useState("");
+  const [resultOpen, setResultOpen] = useState(false);
+  const [preSpinOpen, setPreSpinOpen] = useState(false);
+  const [rewardResult, setRewardResult] = useState<SpinReward | null>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
-    if (isSpinning) {
-      const timer = setTimeout(() => {
-        onSpinComplete();
-      }, 5000); // Match transition duration
-
-      return () => clearTimeout(timer);
+    setWallet(
+      readJson<WalletStore>(WALLET_KEY) ?? { items: [], updatedAt: "" },
+    );
+    setQuota(readQuota());
+    setUsedRewardToday(readUsedRewardToday());
+    const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
+    if (savedProfile) setUserInfo(savedProfile);
+    if (typeof window !== "undefined") {
+      const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
+      if (savedTab === "spin" || savedTab === "rewards") {
+        setActiveTab(savedTab);
+      }
     }
-  }, [isSpinning, onSpinComplete]);
-
-  return (
-    <div className="relative w-80 h-80 md:w-96 md:h-96 mx-auto">
-      {/* Pointer */}
-      <div className="absolute -top-4 left-1/2 -translate-x-1/2 z-40 text-red-600 drop-shadow-lg">
-        <div
-          className="w-8 h-10 bg-red-600 shadow-xl"
-          style={{ clipPath: "polygon(50% 100%, 0 0, 100% 0)" }}
-        />
-      </div>
-
-      {/* Wheel */}
-      <motion.div
-        ref={wheelRef}
-        animate={{ rotate: rotation }}
-        transition={{ duration: 5, ease: [0.15, 0, 0.15, 1] }}
-        className="w-full h-full rounded-full border-8 border-white shadow-2xl relative overflow-hidden bg-white z-10"
-        style={{ transformOrigin: "center" }}
-      >
-        {/* Background Segments */}
-        {REWARDS.map((reward, i) => {
-          const angle = 360 / REWARDS.length;
-          const rotate = i * angle;
-          const skew = 90 - angle;
-          return (
-            <div
-              key={`bg-${reward.id}`}
-              className="absolute top-0 right-0 w-1/2 h-1/2 origin-bottom-left"
-              style={{
-                transform: `rotate(${rotate}deg) skewY(-${skew}deg)`,
-                backgroundColor: i % 2 === 0 ? "#fee2e2" : "#fef9c3",
-                borderLeft: "1px solid rgba(239, 68, 68, 0.1)",
-              }}
-            />
-          );
-        })}
-
-        {/* Labels and Icons Layer */}
-        {REWARDS.map((reward, i) => {
-          const angle = 360 / REWARDS.length;
-          const rotate = i * angle + angle / 2;
-          return (
-            <div
-              key={`label-${reward.id}`}
-              className="absolute top-0 left-0 w-full h-full pointer-events-none"
-              style={{ transform: `rotate(${rotate}deg)` }}
-            >
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 pt-8 md:pt-12 flex flex-col items-center gap-1">
-                <span className="text-[10px] md:text-xs font-black text-red-800 uppercase tracking-tighter text-center leading-none max-w-[60px]">
-                  {reward.label}
-                </span>
-                {reward.type === "voucher" ? (
-                  <Ticket size={14} className="text-red-500/50" />
-                ) : (
-                  <Gift size={14} className="text-red-500/50" />
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Center Button Decor */}
-        <div className="absolute inset-0 flex items-center justify-center z-20">
-          <div className="w-20 h-20 rounded-full bg-white shadow-xl flex items-center justify-center border-4 border-red-50">
-            <Logo className="w-14 h-14" />
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
-export default function XingFuChaLanding() {
-  const [isPreSpinOpen, setIsPreSpinOpen] = useState(false);
-  const [isResultOpen, setIsResultOpen] = useState(false);
-  const [isSpinning, setIsSpinning] = useState(false);
-  const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "" });
-  const [rewardResult, setRewardResult] = useState<Reward | null>(null);
-  const [rotation, setRotation] = useState(0);
-  const [hasSpun, setHasSpun] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handlePreSpinSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userInfo.name || !userInfo.phone) return;
-
-    // Basic Vietnamese phone validation
-    const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
-    if (!phoneRegex.test(userInfo.phone)) {
-      alert("Vui lòng nhập số điện thoại Việt Nam hợp lệ");
+    if (typeof window === "undefined" || !("BroadcastChannel" in window))
       return;
+    const channel = new BroadcastChannel(CHANNEL_KEY);
+    channelRef.current = channel;
+    channel.onmessage = (event) => {
+      if (event.data?.type === "wallet")
+        setWallet(event.data.payload as WalletStore);
+      if (event.data?.type === "quota")
+        setQuota(event.data.payload as DailyQuotaStore | null);
+      if (event.data?.type === "used-today")
+        setUsedRewardToday(Boolean(event.data.payload));
+    };
+    return () => channel.close();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadFingerprint() {
+      try {
+        const fp = await FingerprintJS.load();
+        const result = await fp.get();
+        if (mounted) setFingerprint(result.visitorId);
+      } catch {
+        if (mounted)
+          setFormError(
+            "Không thể xác minh thiết bị lúc này. Vui lòng tải lại trang.",
+          );
+      } finally {
+        if (mounted) setFingerprintReady(true);
+      }
+    }
+    void loadFingerprint();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isSpinning) return;
+    const timer = window.setTimeout(() => {
+      setIsSpinning(false);
+      setResultOpen(true);
+      setActiveTab("rewards");
+      confetti({
+        particleCount: 150,
+        spread: 72,
+        origin: { y: 0.58 },
+        colors: ["#d81b21", "#ffd700", "#fff8dc"],
+      });
+    }, duration + 60);
+    return () => window.clearTimeout(timer);
+  }, [isSpinning, duration]);
+
+  const groupedWallet = useMemo(
+    () =>
+      [...wallet.items].sort((a, b) => {
+        if (b.quantity !== a.quantity) return b.quantity - a.quantity;
+        return (
+          new Date(b.lastWonAt).getTime() - new Date(a.lastWonAt).getTime()
+        );
+      }),
+    [wallet],
+  );
+
+  const persistWallet = (nextWallet: WalletStore) => {
+    setWallet(nextWallet);
+    window.localStorage.setItem(WALLET_KEY, JSON.stringify(nextWallet));
+    writeWalletCookie(nextWallet.items);
+    channelRef.current?.postMessage({ type: "wallet", payload: nextWallet });
+  };
+
+  const persistQuota = (nextQuota: DailyQuotaStore | null) => {
+    setQuota(nextQuota);
+    if (nextQuota) {
+      window.localStorage.setItem(DAILY_QUOTA_KEY, JSON.stringify(nextQuota));
+    } else {
+      window.localStorage.removeItem(DAILY_QUOTA_KEY);
+    }
+    channelRef.current?.postMessage({ type: "quota", payload: nextQuota });
+  };
+
+  const persistProfile = (profile: SavedProfile) => {
+    window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  };
+
+  const persistUsedRewardToday = (used: boolean) => {
+    setUsedRewardToday(used);
+    window.localStorage.setItem(
+      DAILY_USAGE_KEY,
+      JSON.stringify({ day: todayKey(), used }),
+    );
+    channelRef.current?.postMessage({ type: "used-today", payload: used });
+  };
+
+  const addRewardToWallet = (reward: SpinReward, receivedAt: string) => {
+    const current = readJson<WalletStore>(WALLET_KEY) ?? {
+      items: [],
+      updatedAt: "",
+    };
+    const existing = current.items.find((item) => item.id === reward.id);
+    const items = existing
+      ? current.items.map((item) =>
+          item.id === reward.id
+            ? {
+                ...item,
+                quantity: item.quantity + 1,
+                lastWonAt: receivedAt,
+                voucherUsableFrom:
+                  reward.voucherUsableFrom ?? item.voucherUsableFrom ?? null,
+                voucherExpiresAt:
+                  reward.voucherExpiresAt ?? item.voucherExpiresAt ?? null,
+              }
+            : item,
+        )
+      : [
+          ...current.items,
+          {
+            ...reward,
+            quantity: 1,
+            firstWonAt: receivedAt,
+            lastWonAt: receivedAt,
+          },
+        ];
+
+    persistWallet({ items, updatedAt: receivedAt });
+  };
+
+  const localSpinBlocked =
+    quota?.day === todayKey() &&
+    (quota.globalClosed || quota.spinsUsedToday >= quota.maxSpinsToday);
+
+  const handleSpinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError("");
+
+    if (!fingerprint || !fingerprintReady) {
+      setFormError("Đang xác minh thiết bị, vui lòng thử lại sau ít giây.");
+      return;
+    }
+
+    if (localSpinBlocked) {
+      setFormError(
+        quota?.globalClosed
+          ? "Đã tới giới hạn lượt quay hôm nay."
+          : `Thiết bị này đã dùng hết ${quota?.maxSpinsToday ?? 0} lượt quay hôm nay.`,
+      );
+      return;
+    }
+
+    const name = userInfo.name.trim();
+    const phone = userInfo.phone.trim();
+    if (!name || !phone) return setFormError("Vui lòng nhập đầy đủ thông tin.");
+    if (!/^(0|84)(3|5|7|8|9)([0-9]{8})$/.test(phone)) {
+      return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
     }
 
     setLoading(true);
@@ -212,149 +381,408 @@ export default function XingFuChaLanding() {
       const res = await fetch("/api/spin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(userInfo),
+        body: JSON.stringify({ name, phone, deviceFingerprint: fingerprint }),
       });
       const data = await res.json();
 
-      if (data.success) {
-        const targetIdx = data.rewardIndex;
-        const segmentAngle = 360 / REWARDS.length;
-        const extraSpins = 5 * 360;
-        const targetAngle = extraSpins + (360 - targetIdx * segmentAngle);
+      if (!res.ok) {
+        if (
+          res.status === 409 &&
+          data?.code === "DAILY_DEVICE_POOL_LIMIT_REACHED"
+        ) {
+          persistQuota({
+            day: todayKey(),
+            spinsUsedToday: quota?.spinsUsedToday ?? 0,
+            maxSpinsToday: quota?.maxSpinsToday ?? 0,
+            globalClosed: true,
+          });
+          return setFormError("Đã tới giới hạn lượt quay hôm nay.");
+        }
 
-        setRotation((prev) => prev + targetAngle - (prev % 360));
-        setRewardResult(data.reward);
-        setIsPreSpinOpen(false);
-        setIsSpinning(true);
+        if (res.status === 409 && data?.code === "DEVICE_TIER_LIMIT_REACHED") {
+          persistQuota({
+            day: todayKey(),
+            spinsUsedToday: Number(data?.maxSpinsToday ?? 0),
+            maxSpinsToday: Number(data?.maxSpinsToday ?? 0),
+            globalClosed: false,
+          });
+          return setFormError(
+            data?.error ??
+              `Thiết bị này đã dùng hết ${Number(data?.maxSpinsToday ?? 0)} lượt quay hôm nay.`,
+          );
+        }
+
+        throw new Error(data?.error ?? "Không thể quay thưởng lúc này.");
       }
+
+      const index = Number(data.rewardIndex ?? 0);
+      const angle = 360 / REWARDS.length;
+      const spins = 4 + Math.floor(Math.random() * 3);
+      const offset = (Math.random() - 0.5) * (angle * 0.42);
+      const target = spins * 360 + (360 - (index * angle + angle / 2)) + offset;
+      const receivedAt = new Date().toISOString();
+
+      setDuration(4700 + Math.floor(Math.random() * 1100));
+      setRotation((prev) => prev + target - (prev % 360));
+      setRewardResult(data.reward);
+      persistProfile({ name, phone });
+      addRewardToWallet(data.reward, receivedAt);
+      persistQuota({
+        day: todayKey(),
+        spinsUsedToday: Number(data?.limits?.spinsUsedToday ?? 1),
+        maxSpinsToday: Number(data?.limits?.maxSpinsToday ?? 1),
+        globalClosed: false,
+      });
+      setPreSpinOpen(false);
+      setIsSpinning(true);
     } catch (error) {
-      console.error("Spin error:", error);
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Có lỗi xảy ra khi quay vòng quay.",
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const onSpinComplete = () => {
-    setIsSpinning(false);
-    setIsResultOpen(true);
-    setHasSpun(true);
-    confetti({
-      particleCount: 150,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ["#ef4444", "#f59e0b", "#10b981"],
-    });
+  const handleUseReward = async (rewardId: number) => {
+    const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
+    if (!savedProfile?.phone) {
+      setFormError("Chưa tìm thấy thông tin người chơi để sử dụng voucher.");
+      return;
+    }
+
+    if (usedRewardToday) {
+      setFormError("Bạn đã dùng 1 voucher trong hôm nay, chưa thể dùng thêm.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/spins", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "consume-one",
+          phone: savedProfile.phone,
+          rewardId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Không thể sử dụng voucher lúc này.");
+      }
+
+      const current = readJson<WalletStore>(WALLET_KEY) ?? {
+        items: [],
+        updatedAt: "",
+      };
+      const nextItems = current.items
+        .map((item) =>
+          item.id === rewardId
+            ? { ...item, quantity: item.quantity - 1 }
+            : item,
+        )
+        .filter((item) => item.quantity > 0);
+
+      persistWallet({
+        items: nextItems,
+        updatedAt: new Date().toISOString(),
+      });
+      persistUsedRewardToday(true);
+      setFormError("");
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Không thể sử dụng voucher lúc này.",
+      );
+    }
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-red-50 via-yellow-50 to-emerald-50 font-sans overflow-x-hidden">
-      {/* Hero Section */}
-      <section className="relative min-h-screen flex flex-col items-center justify-center px-4 py-20">
-        {/* Background Accents */}
-        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-          <motion.div
-            animate={{ y: [0, -20, 0], rotate: [0, 5, 0] }}
-            transition={{ duration: 5, repeat: Infinity }}
-            className="absolute top-20 left-10 w-32 h-32 bg-red-200/30 rounded-full blur-3xl"
-          />
-          <motion.div
-            animate={{ y: [0, 20, 0], rotate: [0, -5, 0] }}
-            transition={{ duration: 6, repeat: Infinity }}
-            className="absolute bottom-20 right-10 w-48 h-48 bg-emerald-200/30 rounded-full blur-3xl"
-          />
-        </div>
-
-        {/* Logo */}
-        <motion.div
-          initial={{ y: -20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="mb-8"
-        >
-          <div className="bg-white px-6 py-3 rounded-full shadow-xl border border-red-50 flex items-center gap-3">
-            <Logo className="w-12 h-12 md:w-14 md:h-14" />
-            <div className="flex flex-col leading-none">
-              <span className="font-black text-2xl tracking-tighter text-gray-900">
-                XingFuCha
-              </span>
-              <span className="text-[10px] font-bold text-red-500 uppercase tracking-widest">
-                Happiness in every sip
-              </span>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,#fff8dc_0%,#fdf5e6_46%,#f9e4bf_100%)] text-[#571017]">
+      <div className="mx-auto flex min-h-screen w-full max-w-[440px] flex-col px-4 pb-8 pt-4">
+        <header className="rounded-[30px] border border-white/70 bg-white/65 p-4 shadow-[0_20px_40px_rgba(120,24,30,0.08)] backdrop-blur">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white bg-white shadow-lg">
+                <Image
+                  src={logoJpg}
+                  alt="Logo XingFuCha"
+                  fill
+                  sizes="80px"
+                  priority
+                  className="object-cover"
+                />
+              </div>
+              <div>
+                <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-[#b71721]">
+                  XingFuCha
+                </p>
+                <p className="mt-1 text-sm font-semibold text-[#6c1a1f]">
+                  Vòng quay may mắn
+                </p>
+              </div>
+            </div>
+            <div className="rounded-full bg-[#d81b21]/10 px-3 py-1 text-[11px] font-bold text-[#b71721]">
+              Ví quà tích lũy
             </div>
           </div>
-        </motion.div>
 
-        {/* Headline */}
-        <div className="text-center max-w-2xl mb-12">
-          <motion.h1
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="text-5xl md:text-7xl font-black text-gray-900 mb-6 leading-tight"
-          >
-            Quay liền tay <br />
-            <span className="text-red-600">Nhận quà ngay!</span>
-          </motion.h1>
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="text-lg text-gray-600 font-medium"
-          >
-            Hàng ngàn phần quà hấp dẫn đang chờ đón bạn.{" "}
-            <br className="hidden md:block" />
-            Thử vận may của bạn cùng XingFuCha ngay hôm nay!
-          </motion.p>
-        </div>
+          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-[#f8e6c8] p-1.5">
+            {(["spin", "rewards"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`rounded-2xl px-4 py-3 text-sm font-extrabold transition ${activeTab === tab ? "bg-[#d81b21] text-white shadow-[0_10px_20px_rgba(216,27,33,0.22)]" : "text-[#8f111a]"}`}
+              >
+                {tab === "spin" ? "Quay thưởng" : "Phần thưởng của tôi"}
+              </button>
+            ))}
+          </div>
+        </header>
 
-        {/* Spin Wheel Area */}
-        <div className="relative mb-12">
-          <SpinWheel
-            isSpinning={isSpinning}
-            rotation={rotation}
-            onSpinComplete={onSpinComplete}
-          />
-
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30">
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => !hasSpun && !isSpinning && setIsPreSpinOpen(true)}
-              disabled={isSpinning || hasSpun}
-              className={`
-                w-24 h-24 md:w-28 md:h-28 rounded-full font-black text-sm md:text-base shadow-2xl flex items-center justify-center text-center leading-tight transition-all
-                ${
-                  hasSpun
-                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                    : "bg-red-600 text-white hover:bg-red-700 active:bg-red-800"
-                }
-              `}
-            >
-              {isSpinning ? "..." : hasSpun ? "ĐÃ QUAY" : "QUAY\nNGAY"}
-            </motion.button>
+        <div className="mt-4 rounded-[28px] border border-[#d81b21]/10 bg-white/60 p-4 shadow-[0_14px_35px_rgba(120,24,30,0.08)] backdrop-blur">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 text-[#b71721]" size={18} />
+            <div className="text-xs font-semibold leading-5 text-[#6c1a1f]">
+              <p>
+                Giới hạn mỗi ngày: 300 lượt khách đầu quay 3 lượt, 200 lượt
+                khách tiếp quay 2 lượt, 100 lượt khách cuối quay 1 lượt.
+              </p>
+              <p>
+                Sau mốc 600 lượt khách, hệ thống sẽ báo đã tới giới hạn lượt
+                quay hôm nay.
+              </p>
+              <p>
+                Quà trúng sẽ được cộng dồn số lượng trong ví trên trình
+                duyệt.(sau khi quay dùng được 1 voucher duy nhất, sau ngày sẽ tự
+                động mở lại và sử dụng voucher tiếp theo )
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* Scroll Indicator */}
-        <motion.div
-          animate={{ y: [0, 10, 0] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="mt-auto text-gray-400 flex flex-col items-center gap-2"
-        >
-          <span className="text-xs font-bold uppercase tracking-widest">
-            Khám phá thêm
-          </span>
-          <div className="w-px h-12 bg-gradient-to-b from-gray-300 to-transparent" />
-        </motion.div>
-      </section>
+        {activeTab === "spin" ? (
+          <>
+            <section className="relative mt-6 overflow-hidden rounded-[34px] bg-[linear-gradient(180deg,#fff7e7_0%,#ffe4b5_100%)] px-4 pb-6 pt-7 shadow-[0_24px_48px_rgba(120,24,30,0.12)]">
+              <div className="text-center">
+                <p className="text-sm font-bold uppercase tracking-[0.35em] text-[#b71721]/80">
+                  Vòng Xing may mắn
+                </p>
+                <h1 className="mt-2 text-2xl font-black leading-none text-[#d81b21]">
+                  Quay Xing, nhận quà Xịng
+                </h1>
+              </div>
+              <motion.div
+                animate={{ rotate: rotation }}
+                transition={{
+                  duration: duration / 1000,
+                  ease: [0.12, 0, 0.2, 1],
+                }}
+                className="relative mx-auto mt-6 h-[280px] w-[280px] rounded-full border-[10px] border-[#d81b21] bg-[conic-gradient(#fff_0deg_90deg,#fff4d6_90deg_180deg,#fff_180deg_270deg,#fff4d6_270deg_360deg)] shadow-[0_0_20px_rgba(216,27,33,0.28),inset_0_0_12px_rgba(0,0,0,0.14)]"
+              >
+                {REWARDS.map((reward, index) => (
+                  <div
+                    key={reward.id}
+                    className="absolute inset-0"
+                    style={{ transform: `rotate(${index * 90 + 45}deg)` }}
+                  >
+                    <div className="absolute left-1/2 top-5 flex w-20 -translate-x-1/2 flex-col items-center gap-1.5 text-center">
+                      <RewardIcon rewardId={reward.id} size="sm" />
+                      <span className="text-[9px] font-extrabold leading-tight text-[#b71721]">
+                        {reward.label}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="relative flex h-20 w-20 items-center justify-center rounded-full border-4 border-[#d81b21] bg-white shadow-[0_0_15px_rgba(0,0,0,0.12)]">
+                    <Image
+                      src={logoJpg}
+                      alt="Logo XingFuCha"
+                      fill
+                      sizes="56px"
+                      className="rounded-full object-cover p-3"
+                    />
+                  </div>
+                </div>
+              </motion.div>
+              <div className="absolute left-1/2 top-[84px] h-11 w-9 -translate-x-1/2 bg-[#d81b21] [clip-path:polygon(50%_100%,0_0,100%_0)]" />
+            </section>
 
-      {/* Pre-Spin Modal */}
+            <section className="mt-5">
+              {quota && (
+                <div className="mb-4 rounded-[24px] border border-white/80 bg-white/80 p-4 text-sm shadow-sm">
+                  <p className="font-extrabold text-[#8f111a]">
+                    Lượt quay hôm nay
+                  </p>
+                  <p className="mt-2 text-[#6c1a1f]">
+                    Đã dùng{" "}
+                    <span className="font-bold">{quota.spinsUsedToday}</span> /{" "}
+                    <span className="font-bold">{quota.maxSpinsToday}</span>{" "}
+                    lượt trên thiết bị này.
+                  </p>
+                </div>
+              )}
+
+              {localSpinBlocked ? (
+                <div className="rounded-[28px] border border-[#d81b21]/15 bg-white/85 p-5 text-center shadow-sm">
+                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#d81b21]/10 text-[#d81b21]">
+                    <Lock size={22} />
+                  </div>
+                  <p className="text-base font-extrabold text-[#8f111a]">
+                    Thiết bị này đã hết lượt quay hôm nay
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-[#6c1a1f]">
+                    {quota?.globalClosed
+                      ? "Đã tới giới hạn lượt quay hôm nay."
+                      : `Bạn đã dùng hết ${quota?.maxSpinsToday ?? 0} lượt quay trong ngày.`}
+                  </p>
+                </div>
+              ) : (
+                <button
+                  onClick={() => !isSpinning && setPreSpinOpen(true)}
+                  disabled={isSpinning || !fingerprintReady || !fingerprint}
+                  className="w-full rounded-[24px] border-2 border-white bg-gradient-to-b from-[#ffd700] to-[#d8a40c] px-8 py-4 text-2xl font-black text-[#b71721] shadow-[0_8px_0_rgb(180,130,0)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
+                >
+                  {isSpinning
+                    ? "Đang quay..."
+                    : !fingerprintReady || !fingerprint
+                      ? "Đang xác minh thiết bị..."
+                      : "Quay ngay"}
+                </button>
+              )}
+
+              {formError && (
+                <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm font-semibold text-red-700">
+                  {formError}
+                </div>
+              )}
+            </section>
+          </>
+        ) : (
+          <section className="mt-6 rounded-[34px] bg-[linear-gradient(180deg,#fff7e7_0%,#fff0d0_100%)] p-5 shadow-[0_24px_48px_rgba(120,24,30,0.12)]">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#d81b21]/10 text-[#d81b21]">
+                <Gift size={22} />
+              </div>
+              <div>
+                <p className="text-sm font-bold uppercase tracking-[0.22em] text-[#b71721]/75">
+                  Kho quà cá nhân
+                </p>
+                <h2 className="text-2xl font-black text-[#8f111a]">
+                  Phần thưởng của tôi
+                </h2>
+              </div>
+            </div>
+
+            {groupedWallet.length ? (
+              <div className="mt-5 grid gap-4">
+                {groupedWallet.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-[24px] border border-[#f3cf8c] bg-white/90 p-4 shadow-sm"
+                  >
+                    <div className="flex items-start gap-3">
+                      <RewardIcon rewardId={item.id} size="lg" />
+                      <div>
+                        <p className="text-lg font-black leading-tight text-[#d81b21]">
+                          {item.label}
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-[#6c1a1f]">
+                          Số lượng hiện có:{" "}
+                          <span className="rounded-full bg-[#d81b21]/10 px-3 py-1 font-extrabold text-[#b71721]">
+                            {item.quantity}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    {item.code && (
+                      <div className="mt-3 inline-flex rounded-xl border border-[#f3cf8c] bg-[#fff8dc] px-3 py-2 font-mono text-xs font-bold tracking-wider text-[#8f111a]">
+                        {item.code}
+                      </div>
+                    )}
+                    <div className="mt-3 space-y-1.5 text-sm leading-6 text-[#6c1a1f]">
+                      <p>
+                        Nhận lần đầu:{" "}
+                        <span className="font-bold">
+                          {formatTime(item.firstWonAt) ?? "-"}
+                        </span>
+                      </p>
+                      <p>
+                        Nhận gần nhất:{" "}
+                        <span className="font-bold">
+                          {formatTime(item.lastWonAt) ?? "-"}
+                        </span>
+                      </p>
+                      {item.type === "voucher" && (
+                        <p>
+                          Dùng từ:{" "}
+                          <span className="font-bold">
+                            {formatTime(item.voucherUsableFrom) ??
+                              `Sau ${item.voucherDelayMinutes ?? 0} phút`}
+                          </span>
+                        </p>
+                      )}
+                      {item.type === "voucher" && (
+                        <p>
+                          Hết hạn lượt mới nhất:{" "}
+                          <span className="font-bold">
+                            {formatTime(item.voucherExpiresAt) ?? "-"}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleUseReward(item.id)}
+                      disabled={usedRewardToday || item.quantity <= 0}
+                      className="mt-3 w-full rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {usedRewardToday
+                        ? "Hôm nay đã dùng 1 voucher"
+                        : "Sử dụng voucher này"}
+                    </button>
+                  </div>
+                ))}
+                <div className="rounded-[24px] border border-dashed border-[#d81b21]/20 bg-white/70 p-4 text-sm leading-6 text-[#6c1a1f]">
+                  Ví quà đang được lưu bằng{" "}
+                  <span className="font-bold">
+                    localStorage + cookie summary + session tab
+                  </span>{" "}
+                  để giảm tải server. Backend vẫn là nơi quyết định lúc xác nhận
+                  dùng thưởng: mỗi ngày chỉ dùng được 1 phần thưởng.
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 rounded-[28px] border border-dashed border-[#d81b21]/25 bg-white/75 p-6 text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#d81b21]/10 text-[#d81b21]">
+                  <Sparkles size={24} />
+                </div>
+                <p className="mt-4 text-lg font-extrabold text-[#8f111a]">
+                  Bạn chưa có phần thưởng nào
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[#6c1a1f]">
+                  Hãy quay ở tab “Quay thưởng”, quà trúng sẽ tự cộng dồn vào ví
+                  của bạn.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
       <Modal
-        isOpen={isPreSpinOpen}
-        onClose={() => !loading && setIsPreSpinOpen(false)}
+        open={preSpinOpen}
         title="Thông tin người chơi"
+        onClose={() => !loading && setPreSpinOpen(false)}
       >
-        <form onSubmit={handlePreSpinSubmit} className="space-y-4">
+        <form onSubmit={handleSpinSubmit} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-bold text-gray-700 ml-1">
+            <label className="ml-1 text-sm font-bold text-gray-700">
               Họ và tên
             </label>
             <div className="relative">
@@ -366,16 +794,16 @@ export default function XingFuChaLanding() {
                 type="text"
                 required
                 placeholder="Nguyễn Văn A"
-                className="w-full pl-12 pr-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl focus:border-red-500 focus:ring-0 transition-all outline-none"
+                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
                 value={userInfo.name}
                 onChange={(e) =>
-                  setUserInfo({ ...userInfo, name: e.target.value })
+                  setUserInfo((prev) => ({ ...prev, name: e.target.value }))
                 }
               />
             </div>
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-bold text-gray-700 ml-1">
+            <label className="ml-1 text-sm font-bold text-gray-700">
               Số điện thoại
             </label>
             <div className="relative">
@@ -387,84 +815,66 @@ export default function XingFuChaLanding() {
                 type="tel"
                 required
                 placeholder="0901234567"
-                className="w-full pl-12 pr-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl focus:border-red-500 focus:ring-0 transition-all outline-none"
+                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
                 value={userInfo.phone}
                 onChange={(e) =>
-                  setUserInfo({ ...userInfo, phone: e.target.value })
+                  setUserInfo((prev) => ({ ...prev, phone: e.target.value }))
                 }
               />
             </div>
           </div>
           <button
             type="submit"
-            disabled={loading}
-            className="w-full bg-red-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-red-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+            disabled={loading || !fingerprintReady || !fingerprint}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#d81b21] py-4 font-bold text-white shadow-lg disabled:opacity-60"
           >
             {loading ? "Đang xử lý..." : "Bắt đầu quay"}
-            {!loading && <ChevronRight size={20} />}
+            {!loading && <ChevronRight size={18} />}
           </button>
-          <p className="text-[10px] text-center text-gray-400 mt-4">
-            Bằng cách nhấn bắt đầu, bạn đồng ý với các điều khoản của XingFuCha.
-          </p>
         </form>
       </Modal>
 
-      {/* Result Modal */}
-      <Modal isOpen={isResultOpen} onClose={() => setIsResultOpen(false)}>
+      <Modal open={resultOpen} onClose={() => setResultOpen(false)}>
         <div className="text-center">
-          <div className="relative inline-flex items-center justify-center mb-6">
-            <div className="absolute inset-0 bg-yellow-400 blur-2xl opacity-20 animate-pulse" />
-            <Logo className="w-24 h-24" />
+          <div className="mx-auto mb-5">
+            {rewardResult ? (
+              <RewardIcon rewardId={rewardResult.id} size="lg" />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#fff8dc] text-3xl">
+                🎉
+              </div>
+            )}
           </div>
-          <h2 className="text-3xl font-black text-gray-900 mb-2 uppercase italic">
-            Chúc mừng!
-          </h2>
-          <p className="text-gray-600 mb-8">
-            Bạn đã trúng giải thưởng tuyệt vời từ XingFuCha
+          <h2 className="text-3xl font-black text-[#8f111a]">Chúc mừng!</h2>
+          <p className="mt-2 text-sm font-medium text-gray-600">
+            Quà vừa trúng đã được cộng dồn vào ví của bạn
           </p>
-
-          <div className="bg-red-50 border-2 border-dashed border-red-200 rounded-3xl p-8 mb-8 relative overflow-hidden">
-            <div className="absolute -top-4 -left-4 w-12 h-12 bg-white rounded-full" />
-            <div className="absolute -top-4 -right-4 w-12 h-12 bg-white rounded-full" />
-            <div className="absolute -bottom-4 -left-4 w-12 h-12 bg-white rounded-full" />
-            <div className="absolute -bottom-4 -right-4 w-12 h-12 bg-white rounded-full" />
-
-            <div className="flex flex-col items-center gap-3">
-              {rewardResult?.type === "voucher" ? (
-                <Ticket className="text-red-500" size={48} />
-              ) : (
-                <Gift className="text-red-500" size={48} />
-              )}
-              <span className="text-2xl font-black text-red-600 uppercase tracking-tight">
-                {rewardResult?.label}
-              </span>
-              {rewardResult?.code && (
-                <div className="mt-4 px-4 py-2 bg-white rounded-xl border border-red-100 font-mono font-bold text-red-800 tracking-widest">
-                  {rewardResult.code}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <button
-              onClick={() => setIsResultOpen(false)}
-              className="bg-red-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-red-700 transition-all"
-            >
-              Dùng ngay
-            </button>
-            <button className="bg-white text-gray-700 border-2 border-gray-100 font-bold py-4 rounded-2xl hover:bg-gray-50 transition-all flex items-center justify-center gap-2">
-              <Share2 size={18} />
-              Chia sẻ
-            </button>
+          <div className="mt-6 rounded-[28px] border-2 border-dashed border-[#f3cf8c] bg-[#fff8dc] p-6">
+            <p className="text-2xl font-black tracking-tight text-[#d81b21]">
+              {rewardResult?.label}
+            </p>
+            {rewardResult?.code && (
+              <div className="mt-4 inline-flex rounded-xl border border-[#f3cf8c] bg-white px-4 py-2 font-mono text-sm font-bold tracking-wider text-[#8f111a]">
+                {rewardResult.code}
+              </div>
+            )}
+            {rewardResult?.type === "voucher" && (
+              <div className="mt-4 space-y-2 text-sm font-medium leading-6 text-gray-600">
+                <p>
+                  {formatTime(rewardResult.voucherUsableFrom)
+                    ? `Voucher có thể sử dụng từ ${formatTime(rewardResult.voucherUsableFrom)}.`
+                    : `Voucher sẽ được kích hoạt sau ${rewardResult.voucherDelayMinutes ?? 0} phút.`}
+                </p>
+                <p>
+                  {formatTime(rewardResult.voucherExpiresAt)
+                    ? `Voucher hết hạn vào ${formatTime(rewardResult.voucherExpiresAt)}.`
+                    : "Voucher có hiệu lực trong 1 ngày kể từ thời điểm bắt đầu sử dụng."}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </Modal>
-
-      {/* Footer */}
-      <footer className="py-10 text-center text-gray-400 text-sm border-t border-gray-100">
-        <p>© 2026 XingFuCha Vietnam. All rights reserved.</p>
-      </footer>
     </main>
   );
 }
