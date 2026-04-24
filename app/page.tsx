@@ -669,12 +669,12 @@ export default function Page() {
                 </motion.div>
 
                 {/* Mũi tên */}
-                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[60px] w-[60px] -translate-x-1/2 -translate-y-[120%]">
+                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[70px] w-[70px] -translate-x-1/2 -translate-y-[120%]">
                   <Image
                     src="/images/muiten.png"
                     alt="Mũi tên vòng quay"
                     fill
-                    sizes="92px"
+                    sizes="140px"
                     className="object-contain drop-shadow-[0_8px_16px_rgba(120,24,30,0.22)]"
                   />
                 </div>
@@ -807,7 +807,7 @@ export default function Page() {
                   type="button"
                   onClick={() => !isSpinning && setPreSpinOpen(true)}
                   disabled={isSpinning || !fingerprintReady || !fingerprint}
-                  className="w-full rounded-[24px] border-2 border-white bg-gradient-to-b from-[#ffd700] to-[#d8a40c] px-8 py-4 text-2xl font-black text-[#b71721] shadow-[0_8px_0_rgb(180,130,0)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
+                  className="w-full rounded-[24px] border-2 mt-8 border-white bg-gradient-to-b from-[#ffd700] to-[#d8a40c] px-8 py-4 text-2xl font-black text-[#b71721] shadow-[0_8px_0_rgb(180,130,0)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
                 >
                   {isSpinning
                     ? "Đang quay..."
