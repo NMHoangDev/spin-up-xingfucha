@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { consumeRewardByPhoneAndRewardId, listSpinRecords, updateSpinStatus } from "@/lib/spins/store";
+import {
+  consumeRewardByPhoneAndRewardId,
+  listSpinRecords,
+  updateSpinStatus,
+} from "@/lib/spins/store";
 import { consumeRewardFirebase } from "@/lib/spins/firebase-store";
 
 export const runtime = "nodejs";
@@ -102,13 +106,13 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Khách hàng này đã dùng 1 phần thưởng trong hôm nay, chưa thể dùng thêm phần thưởng khác.",
+            "Khách hàng này đã dùng đủ 3 voucher trong hôm nay, vui lòng quay lại vào ngày mai.",
         },
         { status: 409 },
       );
     }
 
-    if (detail === "FIREBASE_ADMIN_NOT_CONFIGURED") {
+    if (detail.startsWith("FIREBASE_ADMIN_NOT_CONFIGURED")) {
       return NextResponse.json(
         { error: "Firebase admin chưa được cấu hình." },
         { status: 500 },

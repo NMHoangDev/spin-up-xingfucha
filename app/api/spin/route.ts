@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { createSeededRng } from "@/lib/rewards/reward.service";
 import { selectRewardForSpinFlow } from "@/lib/rewards/spin-flow";
-import {
-  createSpinRecord,
-  getSpinEligibility,
-} from "@/lib/spins/store";
+import { createSpinRecord, getSpinEligibility } from "@/lib/spins/store";
 import {
   createSpinRecordFirebase,
   getSpinEligibilityFirebase,
@@ -25,9 +21,9 @@ export async function POST(req: NextRequest) {
     const phone = String(body?.phone ?? "").trim();
     const deviceFingerprint = String(body?.deviceFingerprint ?? "").trim();
 
-    if (!name || !phone || !deviceFingerprint) {
+    if (!name || !phone) {
       return NextResponse.json(
-        { error: "Missing name, phone, or device fingerprint" },
+        { error: "Missing name or phone" },
         { status: 400 },
       );
     }
@@ -35,25 +31,14 @@ export async function POST(req: NextRequest) {
     const backend = shouldUseFirebaseBackend() ? "firebase" : "mysql";
     const eligibility =
       backend === "firebase"
-        ? await getSpinEligibilityFirebase({ deviceFingerprint })
-        : await getSpinEligibility({ deviceFingerprint });
+        ? await getSpinEligibilityFirebase({ name, phone })
+        : await getSpinEligibility({ name, phone });
 
-    if (eligibility.hasReachedGlobalDeviceCap) {
+    if (eligibility.spinsToday >= eligibility.maxSpinsToday) {
       return NextResponse.json(
         {
-          code: "DAILY_DEVICE_POOL_LIMIT_REACHED",
-          error: "Đã tới giới hạn lượt quay hôm nay.",
-          nextAvailableAt: eligibility.nextAvailableAt,
-        },
-        { status: 409 },
-      );
-    }
-
-    if (eligibility.deviceSpinsToday >= eligibility.maxSpinsToday) {
-      return NextResponse.json(
-        {
-          code: "DEVICE_TIER_LIMIT_REACHED",
-          error: `Thiết bị này đã dùng hết ${eligibility.maxSpinsToday} lượt quay hôm nay.`,
+          code: "DAILY_USER_LIMIT_REACHED",
+          error: `Khách hàng này đã dùng hết ${eligibility.maxSpinsToday} lượt quay hôm nay.`,
           maxSpinsToday: eligibility.maxSpinsToday,
           nextAvailableAt: eligibility.nextAvailableAt,
         },
@@ -61,13 +46,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const spinNumberToday = eligibility.deviceSpinsToday + 1;
-    const seed = `${deviceFingerprint}-${eligibility.deviceRankToday}-${spinNumberToday}`;
-    const selection = selectRewardForSpinFlow({
-      maxSpinsToday: eligibility.maxSpinsToday,
-      spinNumberToday,
-      rng: createSeededRng(seed),
-    });
+    const spinNumberToday = eligibility.spinsToday + 1;
+    const selection = selectRewardForSpinFlow();
 
     const spin =
       backend === "firebase"
@@ -98,13 +78,8 @@ export async function POST(req: NextRequest) {
       spinId: spin.id,
       rewardIndex: selection.index,
       limits: {
-        deviceRankToday: eligibility.deviceRankToday,
         maxSpinsToday: eligibility.maxSpinsToday,
         spinsUsedToday: spinNumberToday,
-        distinctDevicesToday: Math.max(
-          eligibility.distinctDevicesToday,
-          eligibility.deviceRankToday,
-        ),
       },
       reward: {
         ...selection.reward,
