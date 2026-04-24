@@ -1,10 +1,16 @@
 import { FieldValue } from "firebase-admin/firestore";
 
 import { getFirebaseAdminDb } from "@/lib/firebase/admin";
-import { normalizeVietnamesePhone, type SpinRecord, type RewardKind } from "./store";
+import {
+  normalizeCustomerName,
+  normalizeVietnamesePhone,
+  type SpinRecord,
+  type RewardKind,
+} from "./store";
 
 type FirebaseSpinDoc = {
   name: string;
+  name_normalized: string;
   phone: string;
   phone_normalized: string;
   device_fingerprint: string;
@@ -25,12 +31,6 @@ type FirebaseSpinDoc = {
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
 }
 
 function addMonths(date: Date, months: number) {
@@ -72,40 +72,27 @@ function toSpinRecord(id: string, data: FirebaseSpinDoc): SpinRecord {
 }
 
 export async function getSpinEligibilityFirebase(params: {
-  deviceFingerprint: string;
+  name: string;
+  phone: string;
 }) {
   const db = getFirebaseAdminDb();
   const day = todayKey();
-  const daySnap = await db.collection("spins").where("day_key", "==", day).get();
+  const normalizedPhone = normalizeVietnamesePhone(params.phone);
+  const normalizedName = normalizeCustomerName(params.name);
+  const daySnap = await db
+    .collection("spins")
+    .where("day_key", "==", day)
+    .where("phone_normalized", "==", normalizedPhone)
+    .get();
 
-  const deviceRows = daySnap.docs
-    .map((doc) => ({ id: doc.id, ...(doc.data() as FirebaseSpinDoc) }))
-    .filter((row) => row.device_fingerprint === params.deviceFingerprint);
-
-  const firstSeenByDevice = new Map<string, string>();
-  for (const doc of daySnap.docs) {
+  const spinsToday = daySnap.docs.filter((doc) => {
     const data = doc.data() as FirebaseSpinDoc;
-    if (!data.device_fingerprint) continue;
-    const current = firstSeenByDevice.get(data.device_fingerprint);
-    if (!current || data.created_at < current) {
-      firstSeenByDevice.set(data.device_fingerprint, data.created_at);
-    }
-  }
-
-  const sortedDevices = Array.from(firstSeenByDevice.entries()).sort((a, b) =>
-    a[1].localeCompare(b[1]),
-  );
-  const rank = deviceRows.length
-    ? sortedDevices.findIndex(([device]) => device === params.deviceFingerprint) + 1
-    : sortedDevices.length + 1;
-  const maxSpinsToday = rank <= 300 ? 3 : rank <= 500 ? 2 : rank <= 600 ? 1 : 0;
+    return (data.name_normalized ?? normalizeCustomerName(data.name)) === normalizedName;
+  }).length;
 
   return {
-    deviceSpinsToday: deviceRows.length,
-    distinctDevicesToday: sortedDevices.length,
-    deviceRankToday: rank,
-    maxSpinsToday,
-    hasReachedGlobalDeviceCap: deviceRows.length === 0 && sortedDevices.length >= 600,
+    spinsToday,
+    maxSpinsToday: 5,
     nextAvailableAt: `${day}T24:00:00.000Z`,
   };
 }
@@ -128,6 +115,7 @@ export async function createSpinRecordFirebase(input: {
 
   const payload: FirebaseSpinDoc = {
     name: input.name,
+    name_normalized: normalizeCustomerName(input.name),
     phone: input.phone,
     phone_normalized: normalizeVietnamesePhone(input.phone),
     device_fingerprint: input.deviceFingerprint,
@@ -171,10 +159,9 @@ export async function consumeRewardFirebase(params: {
     .where("phone_normalized", "==", normalizedPhone)
     .where("status", "==", "used")
     .where("used_day_key", "==", day)
-    .limit(1)
     .get();
 
-  if (!usedToday.empty) {
+  if (usedToday.size >= 3) {
     throw new Error("REWARD_DAILY_USAGE_LIMIT");
   }
 

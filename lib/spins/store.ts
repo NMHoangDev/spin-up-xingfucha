@@ -36,11 +36,8 @@ export type CreateSpinInput = {
 };
 
 export type SpinEligibility = {
-  deviceSpinsToday: number;
-  distinctDevicesToday: number;
-  deviceRankToday: number;
+  spinsToday: number;
   maxSpinsToday: number;
-  hasReachedGlobalDeviceCap: boolean;
   nextAvailableAt: string;
 };
 
@@ -70,8 +67,8 @@ type SettingRow = RowDataPacket & {
 };
 
 const VOUCHER_DELAY_KEY = "voucher_activation_delay_minutes";
-const ONE_MINUTE_MS = 60 * 1000;
-const DAILY_DEVICE_LIMIT = 600;
+const DAILY_SPIN_LIMIT_PER_CUSTOMER = 5;
+const DAILY_USAGE_LIMIT = 3;
 
 export function normalizeVietnamesePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
@@ -85,6 +82,10 @@ export function normalizeVietnamesePhone(phone: string): string {
   }
 
   return digits;
+}
+
+export function normalizeCustomerName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLocaleLowerCase("vi-VN");
 }
 
 function addDays(date: Date, days: number): Date {
@@ -107,13 +108,6 @@ function getStartOfTodayLocal(): Date {
 
 function getStartOfTomorrowLocal(): Date {
   return addDays(getStartOfTodayLocal(), 1);
-}
-
-function getMaxSpinsForRank(rank: number): number {
-  if (rank <= 300) return 3;
-  if (rank <= 500) return 2;
-  if (rank <= 600) return 1;
-  return 0;
 }
 
 function toIso(value: Date | string | null): string | null {
@@ -253,72 +247,30 @@ export async function createSpinRecord(input: CreateSpinInput): Promise<{
 }
 
 export async function getSpinEligibility(params: {
-  deviceFingerprint: string;
+  name: string;
+  phone: string;
 }): Promise<SpinEligibility> {
   const todayStart = getStartOfTodayLocal();
   const tomorrowStart = getStartOfTomorrowLocal();
+  const normalizedPhone = normalizeVietnamesePhone(params.phone);
+  const normalizedName = normalizeCustomerName(params.name);
+  const rows = await queryRows<CountRow[]>(
+    `
+      SELECT COUNT(*) AS total
+      FROM spins
+      WHERE phone_normalized = ?
+        AND LOWER(TRIM(name)) = ?
+        AND created_at >= ?
+        AND created_at < ?
+    `,
+    [normalizedPhone, normalizedName, todayStart, tomorrowStart],
+  );
 
-  const [deviceRows, distinctRows] = await Promise.all([
-    queryRows<(CountRow & { first_seen: Date | string | null })[]>(
-      `
-        SELECT
-          COUNT(*) AS total,
-          MIN(created_at) AS first_seen
-        FROM spins
-        WHERE device_fingerprint = ?
-          AND created_at >= ?
-          AND created_at < ?
-      `,
-      [params.deviceFingerprint, todayStart, tomorrowStart],
-    ),
-    queryRows<CountRow[]>(
-      `
-        SELECT COUNT(DISTINCT device_fingerprint) AS total
-        FROM spins
-        WHERE created_at >= ?
-          AND created_at < ?
-          AND device_fingerprint IS NOT NULL
-          AND device_fingerprint <> ''
-      `,
-      [todayStart, tomorrowStart],
-    ),
-  ]);
-
-  const deviceSpinsToday = Number(deviceRows[0]?.total ?? 0);
-  const distinctDevicesToday = Number(distinctRows[0]?.total ?? 0);
-  const firstSeen = toIso(deviceRows[0]?.first_seen ?? null);
-
-  let deviceRankToday = 0;
-  if (firstSeen) {
-    const rankRows = await queryRows<CountRow[]>(
-      `
-        SELECT COUNT(*) AS total
-        FROM (
-          SELECT device_fingerprint, MIN(created_at) AS first_seen
-          FROM spins
-          WHERE created_at >= ?
-            AND created_at < ?
-            AND device_fingerprint IS NOT NULL
-            AND device_fingerprint <> ''
-          GROUP BY device_fingerprint
-          HAVING MIN(created_at) <= ?
-        ) ranked_devices
-      `,
-      [todayStart, tomorrowStart, firstSeen],
-    );
-
-    deviceRankToday = Number(rankRows[0]?.total ?? 0);
-  } else {
-    deviceRankToday = distinctDevicesToday + 1;
-  }
+  const spinsToday = Number(rows[0]?.total ?? 0);
 
   return {
-    deviceSpinsToday,
-    distinctDevicesToday,
-    deviceRankToday,
-    maxSpinsToday: getMaxSpinsForRank(deviceRankToday),
-    hasReachedGlobalDeviceCap:
-      deviceSpinsToday === 0 && distinctDevicesToday >= DAILY_DEVICE_LIMIT,
+    spinsToday,
+    maxSpinsToday: DAILY_SPIN_LIMIT_PER_CUSTOMER,
     nextAvailableAt: tomorrowStart.toISOString(),
   };
 }
@@ -471,7 +423,7 @@ export async function updateSpinStatus(params: {
       [normalizedPhone, todayStart, tomorrowStart, params.id],
     );
 
-    if (Number(usedTodayRows[0]?.total ?? 0) > 0) {
+    if (Number(usedTodayRows[0]?.total ?? 0) >= DAILY_USAGE_LIMIT) {
       throw new Error("REWARD_DAILY_USAGE_LIMIT");
     }
   }
