@@ -67,7 +67,7 @@ type SettingRow = RowDataPacket & {
 };
 
 const VOUCHER_DELAY_KEY = "voucher_activation_delay_minutes";
-const DAILY_SPIN_LIMIT_PER_CUSTOMER = 5;
+const DAILY_SPIN_LIMIT_PER_CUSTOMER = 3;
 const DAILY_USAGE_LIMIT = 3;
 
 export function normalizeVietnamesePhone(phone: string): string {

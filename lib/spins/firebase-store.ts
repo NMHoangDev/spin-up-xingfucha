@@ -87,12 +87,15 @@ export async function getSpinEligibilityFirebase(params: {
 
   const spinsToday = daySnap.docs.filter((doc) => {
     const data = doc.data() as FirebaseSpinDoc;
-    return (data.name_normalized ?? normalizeCustomerName(data.name)) === normalizedName;
+    return (
+      (data.name_normalized ?? normalizeCustomerName(data.name)) ===
+      normalizedName
+    );
   }).length;
 
   return {
     spinsToday,
-    maxSpinsToday: 5,
+    maxSpinsToday: 3,
     nextAvailableAt: `${day}T24:00:00.000Z`,
   };
 }
