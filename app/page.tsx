@@ -59,19 +59,19 @@ const rewardVisuals: Record<
     emoji: "🥤",
     accent: "#b91c1c",
     soft: "#fee2e2",
-    shortLabel: "Trà sữa M",
+    shortLabel: "Trà sữa(M)",
   },
   2: {
     emoji: "🥥",
     accent: "#9a3412",
     soft: "#ffedd5",
-    shortLabel: "Nước dừa L",
+    shortLabel: "Nước dừa(L)",
   },
   3: {
     emoji: "🍋",
     accent: "#4d7c0f",
     soft: "#ecfccb",
-    shortLabel: "Trái cây L",
+    shortLabel: "Trà Trái cây(L)",
   },
 };
 
@@ -94,9 +94,29 @@ function formatTime(value?: string | null) {
 
 function getRewardConditionNote(reward?: { id: number } | null) {
   if (!reward) return null;
-  if (reward.id === 0) return "Trừ topping có giá trị 10K.";
-  if (reward.id === 2) return "Trừ nước dừa full topping.";
+  if (reward.id === 0) return "Không sử dụng cho topping 10k";
+  if (reward.id === 2)
+    return "Không sử dụng cho nước dừa  full topping thủ công.";
+  if (reward.id === 1) return `Chỉ sử dụng cho mục "Trà sữa chí cốt"`;
+  if (reward.id === 3) return `Áp dụng toàn bộ trong nhóm thanh xuân`;
+
   return null;
+}
+
+function getRewardCodeDescription(code?: string | null) {
+  if (!code) return null;
+  switch (code) {
+    case "TRA-TRAI-CAY-L":
+      return "Áp dụng cho toàn bộ nhóm thanh xuân";
+    case "TRA-SUA-M":
+      return `Chỉ sử dụng cho mục "Trà sữa chí cốt"`;
+    case "Topping bất kỳ":
+      return "Không sử dụng cho topping 10k";
+    case "NƯỚC DỪA(L)":
+      return "Không sử dụng cho nước dừa full topping thủ công";
+    default:
+      return code;
+  }
 }
 
 function readJson<T>(key: string): T | null {
@@ -169,7 +189,12 @@ function Modal({
             onClick={closeOnBackdrop ? onClose : undefined}
           />
           <motion.div
-            className="relative z-10 w-full max-w-sm rounded-[28px] bg-white p-6 shadow-2xl"
+            className="relative z-10 w-full max-w-sm rounded-[28px] p-6 shadow-2xl"
+            style={{
+              backgroundImage: "url('/images/background.png')",
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+            }}
             initial={{ opacity: 0, y: 18, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 18, scale: 0.96 }}
@@ -225,6 +250,8 @@ export default function Page() {
   );
   const [useRewardLoading, setUseRewardLoading] = useState(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
+  const spinSectionRef = useRef<HTMLDivElement | null>(null);
+  const buttonSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setRulesPopupOpen(true);
@@ -282,6 +309,19 @@ export default function Page() {
     }
   }, [activeTab]);
 
+  // Scroll to button section on page load
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (buttonSectionRef.current) {
+        buttonSectionRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   // Khi spin kết thúc → bắt đầu animation unbox
   useEffect(() => {
     if (!isSpinning) return;
@@ -298,12 +338,12 @@ export default function Page() {
     return () => window.clearTimeout(timer);
   }, [duration, isSpinning]);
 
-  // Animation unbox kéo dài 2s, rồi dừng 0.5s, rồi mở popup voucher
+  // Animation unbox: 3s shake + 4s opening = 7s, rồi mở popup voucher
   useEffect(() => {
     if (!showUnboxAnimation) return;
     const timer = window.setTimeout(() => {
       setResultOpen(true);
-    }, 2500); // 2s animation + 0.5s pause
+    }, 7500); // 7.3s emoji + 0.2s buffer
     return () => window.clearTimeout(timer);
   }, [showUnboxAnimation]);
 
@@ -530,25 +570,31 @@ export default function Page() {
       </div>
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[440px] flex-col px-4 pb-8 pt-4">
-        <header className="rounded-[30px] border border-white/70 bg-white/70 p-4 shadow-[0_20px_40px_rgba(120,24,30,0.08)] backdrop-blur">
+        <header
+          className="rounded-[30px] border border-white/70 p-4 shadow-[0_20px_40px_rgba(120,24,30,0.08)] backdrop-blur"
+          style={{
+            backgroundImage: "url('/images/background.png')",
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-white bg-white shadow-lg">
+              <div className="relative h-14 w-14 overflow-hidden rounded-full border-2 border-white bg-transparent ">
                 <Image
                   src={logoJpg}
                   alt="Logo XingFuCha"
                   fill
-                  sizes="80px"
-                  priority
-                  className="object-cover"
+                  sizes="64px"
+                  className="object-contain"
                 />
               </div>
               <div>
+                <p className="mt-1 text-sm font-semibold text-[#6c1a1f]">
+                  Vòng Xing May Mắn
+                </p>
                 <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-[#b71721]">
                   XingFuCha
-                </p>
-                <p className="mt-1 text-sm font-semibold text-[#6c1a1f]">
-                  Vòng May Mắn
                 </p>
               </div>
             </div>
@@ -585,6 +631,7 @@ export default function Page() {
         {activeTab === "spin" ? (
           <>
             <section
+              ref={spinSectionRef}
               className="relative mt-6 rounded-[34px] px-3 sm:px-4 pb-6 pt-7 shadow-[0_24px_48px_rgba(120,24,30,0.12)]"
               style={{
                 backgroundImage: "url('/images/nenchosectionvongquay.jpg')",
@@ -669,12 +716,12 @@ export default function Page() {
                 </motion.div>
 
                 {/* Mũi tên */}
-                <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[70px] w-[70px] -translate-x-1/2 -translate-y-[120%]">
+                <div className="pointer-events-none absolute left-1/2 top-1/2 mt-2 z-20 h-[80px] w-[80px] -translate-x-1/2 -translate-y-[120%]">
                   <Image
                     src="/images/muiten.png"
                     alt="Mũi tên vòng quay"
                     fill
-                    sizes="140px"
+                    sizes="180px"
                     className="object-contain drop-shadow-[0_8px_16px_rgba(120,24,30,0.22)]"
                   />
                 </div>
@@ -775,17 +822,24 @@ export default function Page() {
               </div>
             </section>
 
-            <section className="mt-5">
+            <section ref={buttonSectionRef} className="mt-5">
               {quota && quota.profileKey === currentProfileKey && (
-                <div className="mb-4 mt-6 rounded-[24px] border border-white/80 bg-white/82 p-4 text-sm shadow-sm">
+                <div
+                  className="mb-4 mt-6 rounded-[24px] border border-white/80 p-4 text-sm shadow-sm"
+                  style={{
+                    backgroundImage: "url('/images/background.png')",
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                  }}
+                >
                   <p className="font-extrabold text-[#8f111a]">
                     Lượt quay hôm nay
                   </p>
                   <p className="mt-2 text-[#6c1a1f]">
-                    Đã dùng{" "}
+                    Bạn đã dùng{" "}
                     <span className="font-bold">{quota.spinsUsedToday}</span> /{" "}
                     <span className="font-bold">{quota.maxSpinsToday}</span>{" "}
-                    lượt cho khách hàng này.
+                    lượt cho hôm nay.
                   </p>
                 </div>
               )}
@@ -807,7 +861,7 @@ export default function Page() {
                   type="button"
                   onClick={() => !isSpinning && setPreSpinOpen(true)}
                   disabled={isSpinning || !fingerprintReady || !fingerprint}
-                  className="w-full rounded-[24px] border-2 mt-8 border-white bg-gradient-to-b from-[#ffd700] to-[#d8a40c] px-8 py-4 text-2xl font-black text-[#b71721] shadow-[0_8px_0_rgb(180,130,0)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
+                  className="w-full rounded-[24px] border-2 mt-4 border-white bg-[#cb313d] px-8 py-4 text-2xl font-black text-[#f2f6dd] shadow-[0_8px_0_rgb(139,25,32)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
                 >
                   {isSpinning
                     ? "Đang quay..."
@@ -837,7 +891,7 @@ export default function Page() {
                 >
                   <div className="space-y-3 text-sm font-semibold leading-6 text-[#6c1a1f]">
                     <p>
-                      Mỗi khách hàng được quay tối đa 5 lượt mỗi ngày theo đúng
+                      Mỗi khách hàng được quay tối đa 3 lượt mỗi ngày theo đúng
                       tên và số điện thoại đã nhập.
                     </p>
                     <p>
@@ -869,8 +923,16 @@ export default function Page() {
                     key={item.id}
                     className="rounded-[24px] border border-[#f3cf8c] bg-white/90 p-4 shadow-sm"
                   >
-                    <div className="flex items-start gap-3">
-                      <RewardIcon rewardId={item.id} size="lg" />
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-26 w-26 flex-shrink-0">
+                        <Image
+                          src="/images/logo.png"
+                          alt="Logo XingFuCha"
+                          fill
+                          sizes="64px"
+                          className="object-contain"
+                        />
+                      </div>
                       <div className="min-w-0">
                         <p className="text-lg font-black leading-tight text-[#d81b21]">
                           {item.label}
@@ -885,7 +947,7 @@ export default function Page() {
                     </div>
                     {item.code && (
                       <div className="mt-3 inline-flex rounded-xl border border-[#f3cf8c] bg-[#fff8dc] px-3 py-2 font-mono text-xs font-bold tracking-wider text-[#8f111a]">
-                        {item.code}
+                        {getRewardCodeDescription(item.code)}
                       </div>
                     )}
                     <div className="mt-3 space-y-1.5 text-sm leading-6 text-[#6c1a1f]">
@@ -928,15 +990,15 @@ export default function Page() {
                       )}
                       {item.type === "voucher" && (
                         <p className="rounded-2xl bg-[#fff8dc] px-3 py-2 text-xs font-semibold leading-5 text-[#8f111a]">
-                          Điều kiện: voucher dùng được ngay sau khi quay, có hạn
-                          1 tháng và mỗi khách hàng chỉ dùng tối đa 3 voucher
-                          trong ngày.
+                          Điều kiện: Voucher có hạn 1 tháng và mỗi khách hàng
+                          chỉ dùng tối đa 3 voucher trong ngày.Voucher chỉ được
+                          sử dụng cho đơn hàng có giá trị hơn 40.000 nghìn đồng
                         </p>
                       )}
                       {item.type === "voucher" &&
                         getRewardConditionNote(item) && (
                           <p className="rounded-2xl bg-[#fff8dc] px-3 py-2 text-xs font-semibold leading-5 text-[#8f111a]">
-                            Điều kiện quà: {getRewardConditionNote(item)}
+                            Lưu ý: {getRewardConditionNote(item)}
                           </p>
                         )}
                     </div>
@@ -989,7 +1051,7 @@ export default function Page() {
           >
             {/* Container hộp quà */}
             <div className="relative h-[900px] w-[900px]">
-              {/* hopquafull: hiện ngay, ẩn dần chậm sau 0.5s */}
+              {/* hopquafull: lắc lắc 3s, rồi ẩn dần */}
               <motion.div
                 className="absolute h-[680px] w-[680px]"
                 style={{
@@ -998,9 +1060,17 @@ export default function Page() {
                   x: "-50%",
                   y: "-50%",
                 }}
-                initial={{ opacity: 1, scale: 1 }}
-                animate={{ opacity: 0, scale: 0.85 }}
-                transition={{ duration: 0.8, delay: 0.5 }}
+                initial={{ opacity: 1, scale: 1, rotate: 0 }}
+                animate={{
+                  rotate: [0, -2, 2, -2, 2, -1.5, 1.5, -1.5, 1.5, 0],
+                  opacity: [1, 1, 1, 0],
+                  scale: [1, 1, 1, 0.85],
+                }}
+                transition={{
+                  rotate: { duration: 3, delay: 0, ease: "easeInOut" },
+                  opacity: { duration: 0.8, delay: 3, ease: "easeInOut" },
+                  scale: { duration: 0.8, delay: 3, ease: "easeInOut" },
+                }}
               >
                 <Image
                   src="/images/hopquafull.png"
@@ -1011,7 +1081,7 @@ export default function Page() {
                 />
               </motion.div>
 
-              {/* hopquakhongnap: bay xuống trái chậm rãi */}
+              {/* hopquakhongnap: bay xuống trái 4s */}
               <motion.div
                 className="absolute h-[560px] w-[560px]"
                 style={{
@@ -1028,8 +1098,8 @@ export default function Page() {
                   rotate: -15,
                 }}
                 transition={{
-                  duration: 2.2,
-                  delay: 0.5,
+                  duration: 4,
+                  delay: 3,
                   ease: [0.25, 0.46, 0.45, 0.94],
                 }}
               >
@@ -1042,7 +1112,7 @@ export default function Page() {
                 />
               </motion.div>
 
-              {/* napqua: bay lên phải chậm rãi */}
+              {/* napqua: bay lên phải 4s */}
               <motion.div
                 className="absolute h-[500px] w-[500px]"
                 style={{
@@ -1059,8 +1129,8 @@ export default function Page() {
                   rotate: 28,
                 }}
                 transition={{
-                  duration: 2.2,
-                  delay: 0.5,
+                  duration: 4,
+                  delay: 3,
                   ease: [0.25, 0.46, 0.45, 0.94],
                 }}
               >
@@ -1080,7 +1150,7 @@ export default function Page() {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{
                   duration: 0.5,
-                  delay: 2.8,
+                  delay: 7.3,
                   ease: [0.34, 1.56, 0.64, 1],
                 }}
               >
@@ -1093,7 +1163,7 @@ export default function Page() {
                 style={{ textShadow: "0 2px 12px rgba(0,0,0,0.5)" }}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: 2.9 }}
+                transition={{ duration: 0.4, delay: 7.4 }}
               >
                 Chúc mừng bạn đã trúng thưởng! 🎊
               </motion.p>
@@ -1172,7 +1242,7 @@ export default function Page() {
           transition={{ duration: 0.35, ease: "easeOut" }}
         >
           <motion.div
-            className="mx-auto mb-5 flex justify-center"
+            className="mx-auto -mb-8 flex justify-center"
             initial={{ y: -16, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.1, duration: 0.4 }}
@@ -1182,7 +1252,15 @@ export default function Page() {
                 animate={{ y: [0, -8, 0] }}
                 transition={{ duration: 0.6, repeat: 3, ease: "easeInOut" }}
               >
-                <RewardIcon rewardId={rewardResult.id} size="lg" />
+                <div className="relative h-40 w-40">
+                  <Image
+                    src="/images/logo.png"
+                    alt="Logo XingFuCha"
+                    fill
+                    sizes="120px"
+                    className="object-contain"
+                  />
+                </div>
               </motion.div>
             ) : (
               <motion.div
@@ -1194,24 +1272,24 @@ export default function Page() {
               </motion.div>
             )}
           </motion.div>
-
-          <motion.h2
-            className="text-3xl font-black text-[#8f111a]"
-            initial={{ y: 10, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.15, duration: 0.4 }}
-          >
-            Chúc mừng!
-          </motion.h2>
-          <motion.p
-            className="mt-2 text-sm font-medium text-gray-600"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.25, duration: 0.3 }}
-          >
-            Quà vừa trúng đã được cộng dồn vào kho quà của bạn.
-          </motion.p>
-
+          <div className="bg-white rounded-xl p-2 mb-6">
+            <motion.h2
+              className="text-3xl font-black text-[#8f111a]"
+              initial={{ y: 10, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.15, duration: 0.4 }}
+            >
+              Chúc mừng!
+            </motion.h2>
+            <motion.p
+              className="mt-2 text-sm font-medium text-gray-600"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.25, duration: 0.3 }}
+            >
+              Quà vừa trúng đã được cộng dồn vào kho quà của bạn.
+            </motion.p>
+          </div>
           <motion.div
             className="mt-6 rounded-[28px] border-2 border-dashed border-[#f3cf8c] bg-[#fff8dc] p-6"
             initial={{ y: 20, opacity: 0 }}
@@ -1223,9 +1301,10 @@ export default function Page() {
             </p>
             {rewardResult?.code && (
               <div className="mt-4 inline-flex rounded-xl border border-[#f3cf8c] bg-white px-4 py-2 font-mono text-sm font-bold tracking-wider text-[#8f111a]">
-                {rewardResult.code}
+                {getRewardCodeDescription(rewardResult.code)}
               </div>
             )}
+
             {rewardResult?.type === "voucher" && (
               <div className="mt-4 space-y-2 text-sm font-medium leading-6 text-gray-600">
                 <p>
@@ -1240,7 +1319,7 @@ export default function Page() {
                 </p>
                 {getRewardConditionNote(rewardResult) && (
                   <p className="rounded-2xl bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-[#8f111a]">
-                    Điều kiện quà: {getRewardConditionNote(rewardResult)}
+                    Điều kiện: {getRewardConditionNote(rewardResult)}
                   </p>
                 )}
               </div>
@@ -1256,29 +1335,32 @@ export default function Page() {
         closeOnBackdrop={false}
       >
         <div className="space-y-4 text-center">
-          <p className="text-sm font-semibold leading-6 text-[#6c1a1f]">
-            Vui lòng đưa màn hình này cho nhân viên để kiểm tra trước khi xác
-            nhận dùng voucher.
-          </p>
           {rewardToUse && (
             <div className="rounded-2xl border border-[#f3cf8c] bg-[#fff8dc] p-4">
-              <div className="mb-3 flex justify-center">
-                <RewardIcon rewardId={rewardToUse.id} size="lg" />
+              <div className="-mb-4 flex justify-center">
+                <div className="relative h-32 w-32">
+                  <Image
+                    src="/images/logo.png"
+                    alt="Logo XingFuCha"
+                    fill
+                    sizes="150px"
+                    className="object-contain"
+                  />
+                </div>
               </div>
               <p className="text-lg font-black text-[#d81b21]">
                 {rewardToUse.label}
               </p>
-              {rewardToUse.code && (
-                <div className="mt-3 inline-flex rounded-xl border border-[#f3cf8c] bg-white px-3 py-2 font-mono text-xs font-bold tracking-wider text-[#8f111a]">
-                  {rewardToUse.code}
-                </div>
-              )}
+              <div className="mt-3 space-y-2">
+                {getRewardConditionNote(rewardToUse) && (
+                  <div className="mt-2 rounded-xl border border-[#f3cf8c] bg-[#fff8dc] px-3 py-2 text-xs font-semibold text-[#8f111a]">
+                    {getRewardConditionNote(rewardToUse)}
+                  </div>
+                )}
+              </div>
             </div>
           )}
-          <p className="rounded-2xl bg-[#d81b21]/10 px-4 py-3 text-xs font-bold text-[#8f111a]">
-            Lưu ý: Sau khi xác nhận, voucher sẽ bị trừ ngay và không thể hoàn
-            tác.
-          </p>
+
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
@@ -1317,23 +1399,38 @@ export default function Page() {
             <CheckCircle2 size={34} className="text-emerald-600" />
           </div>
           <p className="text-sm font-semibold leading-6 text-[#6c1a1f]">
-            Voucher đã được trừ thành công. Vui lòng cho nhân viên kiểm tra để
-            hoàn tất. Hãy đảm bảo đưa cho nhân viên check trước khi xác nhận
-            nhé.
+            Vui lòng cho nhân viên kiểm tra để hoàn tất. Hãy đảm bảo đưa cho
+            nhân viên check trước khi xác nhận nhé.
           </p>
           {usedVoucherInfo && (
             <div className="rounded-2xl border border-[#f3cf8c] bg-[#fff8dc] p-4">
-              <div className="mb-3 flex justify-center">
-                <RewardIcon rewardId={usedVoucherInfo.id} size="lg" />
+              <div className="-mb-4 flex justify-center">
+                <div className="relative h-32 w-32">
+                  <Image
+                    src="/images/logo.png"
+                    alt="Logo XingFuCha"
+                    fill
+                    sizes="150px"
+                    className="object-contain"
+                  />
+                </div>
               </div>
               <p className="text-lg font-black text-[#d81b21]">
                 {usedVoucherInfo.label}
               </p>
-              {usedVoucherInfo.code && (
-                <div className="mt-3 inline-flex rounded-xl border border-[#f3cf8c] bg-white px-3 py-2 font-mono text-xs font-bold tracking-wider text-[#8f111a]">
-                  {usedVoucherInfo.code}
-                </div>
-              )}
+
+              <div className="mt-3 space-y-2">
+                {usedVoucherInfo.code && (
+                  <div className="inline-flex rounded-xl border border-[#f3cf8c] bg-white px-3 py-2 font-mono text-xs font-bold tracking-wider text-[#8f111a]">
+                    {getRewardCodeDescription(usedVoucherInfo.code)}
+                  </div>
+                )}
+                {getRewardConditionNote(usedVoucherInfo) && (
+                  <div className="mt-2 rounded-xl border border-[#f3cf8c] bg-[#fff8dc] px-3 py-2 text-xs font-semibold text-[#8f111a]">
+                    {getRewardConditionNote(usedVoucherInfo)}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           <button
