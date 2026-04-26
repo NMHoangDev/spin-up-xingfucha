@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import PageContent from "./PageContent";
 
-export default function Page() {
+export default function ClientOnly({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -13,5 +16,5 @@ export default function Page() {
 
   if (!mounted) return null;
 
-  return <PageContent />;
+  return <>{children}</>;
 }

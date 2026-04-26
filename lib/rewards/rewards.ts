@@ -12,15 +12,17 @@ export type Reward = {
 export const REWARDS: Reward[] = [
   {
     id: 0,
-    label: "Topping bất kỳ",
-    type: "item",
+    label: "1 Topping bất kỳ",
+    type: "voucher",
+    code: "TOPPING",
     icon: "topping",
     weight: 25,
   },
   {
     id: 1,
     label: "1 Trà sữa bất kỳ (M)",
-    type: "item",
+    code: "TRA-SUA-M",
+    type: "voucher",
     icon: "combo",
     weight: 25,
   },
