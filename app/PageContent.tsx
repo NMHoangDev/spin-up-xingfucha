@@ -254,6 +254,7 @@ export default function PageContent() {
   const [useRewardLoading, setUseRewardLoading] = useState(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
+  const buttonSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setWallet(
@@ -316,7 +317,26 @@ export default function PageContent() {
   }, [activeTab]);
 
   useEffect(() => {
-    setRulesPopupOpen(true);
+    const hasShownRulesPopup = window.sessionStorage.getItem(
+      "xfc-rules-shown-this-session",
+    );
+    if (!hasShownRulesPopup) {
+      setRulesPopupOpen(true);
+      window.sessionStorage.setItem("xfc-rules-shown-this-session", "true");
+    }
+  }, []);
+
+  // Auto-scroll to button section on page load
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (buttonSectionRef.current) {
+        buttonSectionRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // Khi spin kết thúc → bắt đầu animation unbox
@@ -606,7 +626,7 @@ export default function PageContent() {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-2 rounded-2xl bg-[#fff4de] p-3 text-sm text-[#6c1a1f]">
+          <div className="mt-4 grid grid-cols-1 gap-2 rounded-2xl bg-white p-3 text-sm text-[#6c1a1f]">
             <p>
               <span className="font-bold">Khách hàng:</span>{" "}
               {userInfo.name.trim() || "Chưa cập nhật"}
@@ -617,7 +637,7 @@ export default function PageContent() {
             </p>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-[#f8e6c8] p-1.5">
+          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1.5">
             {(["spin", "rewards"] as const).map((tab) => (
               <button
                 key={tab}
@@ -825,7 +845,10 @@ export default function PageContent() {
               </div>
             </section>
 
-            <section className="mt-5 flex flex-col gap-4">
+            <section
+              className="mt-5 flex flex-col gap-4"
+              ref={buttonSectionRef}
+            >
               {/* Button luôn render trước */}
               <button
                 type="button"
@@ -848,37 +871,6 @@ export default function PageContent() {
                       ? "Đang xác minh thiết bị..."
                       : "Quay ngay"}
               </button>
-
-              {/* Quota chỉ render sau khi button đã paint xong */}
-              <div
-                className="rounded-[24px] border border-white/80 p-4 text-sm shadow-sm min-h-[72px]"
-                style={{
-                  backgroundImage: "url('/images/background.png')",
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                }}
-              >
-                {showQuota &&
-                quota &&
-                quota.profileKey === currentProfileKey ? (
-                  <>
-                    <p className="font-extrabold text-[#8f111a]">
-                      Lượt quay hôm nay
-                    </p>
-                    <p className="mt-2 text-[#6c1a1f]">
-                      Bạn đã dùng{" "}
-                      <span className="font-bold">{quota.spinsUsedToday}</span>{" "}
-                      / <span className="font-bold">{quota.maxSpinsToday}</span>{" "}
-                      lượt cho hôm nay.
-                    </p>
-                  </>
-                ) : (
-                  <div className="animate-pulse space-y-2">
-                    <div className="h-4 w-32 rounded bg-[#d81b21]/20" />
-                    <div className="h-4 w-48 rounded bg-[#d81b21]/10" />
-                  </div>
-                )}
-              </div>
 
               {formError && (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm font-semibold text-red-700">
@@ -920,7 +912,7 @@ export default function PageContent() {
                 <p className="text-sm font-bold uppercase tracking-[0.22em] text-[#b71721]/75">
                   Kho quà nhà Xing
                 </p>
-                <h2 className="text-2xl font-black text-[#8f111a]">
+                <h2 className="text-2xl font-black text-[#8f111a] ">
                   Phần thưởng của bạn
                 </h2>
               </div>
@@ -979,9 +971,7 @@ export default function PageContent() {
                       )}
                       {item.type === "voucher" && (
                         <p className="rounded-2xl bg-[#fff8dc] px-3 py-2 text-xs font-semibold leading-5 text-[#8f111a]">
-                          Điều kiện: Voucher có hạn 1 tháng và mỗi khách hàng
-                          chỉ dùng tối đa 3 voucher trong ngày.Voucher chỉ đượ c
-                          sử dụng cho đơn hàng có giá trị từ 40.000 nghìn đồng
+                          Điều kiện: Voucher được áp dụng cho hóa đơn 40K
                         </p>
                       )}
                     </div>
@@ -1282,11 +1272,6 @@ export default function PageContent() {
             <p className="text-2xl font-black tracking-tight text-[#d81b21]">
               {rewardResult?.label}
             </p>
-            {rewardResult?.code && (
-              <div className="mt-4 inline-flex rounded-xl border border-[#f3cf8c] bg-white px-4 py-2 font-mono text-sm font-bold tracking-wider text-[#8f111a]">
-                {getRewardCodeDescription(rewardResult.code)}
-              </div>
-            )}
 
             {rewardResult?.type === "voucher" && (
               <div className="mt-2 space-y-2 text-xs font-medium leading-6 text-gray-600 text-left ml-2">
