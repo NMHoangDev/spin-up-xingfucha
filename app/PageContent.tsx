@@ -112,7 +112,7 @@ function getRewardCodeDescription(code?: string | null) {
     case "TRA-TRAI-CAY-L":
       return "Áp dụng cho toàn bộ nhóm thanh xuân";
     case "TRA-SUA-M":
-      return `Trừ trà sữa fulltopping`;
+      return `Không áp dụng cho trà sữa fulltopping`;
     case "TOPPING":
       return "Không áp dụng cho topping 10k";
     case "NUOCDUA-L":
@@ -245,8 +245,6 @@ export default function PageContent() {
   const [rewardResult, setRewardResult] = useState<SpinReward | null>(null);
   const [showUnboxAnimation, setShowUnboxAnimation] = useState(false);
   const [rulesPopupOpen, setRulesPopupOpen] = useState(false);
-  const [confirmUseOpen, setConfirmUseOpen] = useState(false);
-  const [rewardToUse, setRewardToUse] = useState<WalletItem | null>(null);
   const [usedVoucherOpen, setUsedVoucherOpen] = useState(false);
   const [usedVoucherInfo, setUsedVoucherInfo] = useState<WalletItem | null>(
     null,
@@ -523,7 +521,12 @@ export default function PageContent() {
       );
     setUseRewardLoading(true);
     try {
-      const consumedReward = rewardToUse;
+      const current = readJson<WalletStore>(WALLET_KEY) ?? {
+        items: [],
+        updatedAt: "",
+      };
+      const consumedReward = current.items.find((item) => item.id === rewardId);
+
       const res = await fetch("/api/spins", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -536,10 +539,7 @@ export default function PageContent() {
       const data = await res.json();
       if (!res.ok)
         throw new Error(data?.error ?? "Không thể sử dụng voucher lúc này.");
-      const current = readJson<WalletStore>(WALLET_KEY) ?? {
-        items: [],
-        updatedAt: "",
-      };
+
       const usedAt = data?.data?.usedAt ?? new Date().toISOString();
       const nextItems = current.items
         .map((item) =>
@@ -551,10 +551,8 @@ export default function PageContent() {
       persistWallet({ items: nextItems, updatedAt: new Date().toISOString() });
       persistUsedRewardCount(usedRewardCount + 1);
       setFormError("");
-      setConfirmUseOpen(false);
-      setUsedVoucherInfo(consumedReward);
+      setUsedVoucherInfo(consumedReward || null);
       setUsedVoucherOpen(true);
-      setRewardToUse(null);
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -893,10 +891,6 @@ export default function PageContent() {
                 >
                   <div className="space-y-3 text-sm font-semibold leading-6 text-[#6c1a1f] bg-white p-2 rounded-xl">
                     <p>
-                      Mỗi khách hàng được quay tối đa 3 lượt mỗi ngày theo đúng
-                      tên và số điện thoại đã nhập.
-                    </p>
-                    <p>
                       Voucher có thể dùng ngay sau khi trúng, hết hạn sau 1
                       tháng và mỗi ngày dùng tối đa 3 voucher.
                     </p>
@@ -978,16 +972,20 @@ export default function PageContent() {
                     <button
                       type="button"
                       onClick={() => {
-                        setRewardToUse(item);
-                        setConfirmUseOpen(true);
-                        setFormError("");
+                        void handleUseReward(item.id);
                       }}
-                      disabled={usedRewardCount >= 3 || item.quantity <= 0}
+                      disabled={
+                        usedRewardCount >= 3 ||
+                        item.quantity <= 0 ||
+                        useRewardLoading
+                      }
                       className="mt-3 w-full rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {usedRewardCount >= 3
-                        ? "Hôm nay đã dùng đủ 3 voucher"
-                        : "Sử dụng voucher này"}
+                      {useRewardLoading
+                        ? "Đang xử lý..."
+                        : usedRewardCount >= 3
+                          ? "Hôm nay đã dùng đủ 3 voucher"
+                          : "Sử dụng voucher này"}
                     </button>
                   </div>
                 ))}
@@ -1289,67 +1287,6 @@ export default function PageContent() {
             )}
           </motion.div>
         </motion.div>
-      </Modal>
-
-      {/* ─── MODAL XÁC NHẬN DÙNG VOUCHER ─── */}
-      <Modal
-        open={confirmUseOpen}
-        title="Xác nhận sử dụng voucher"
-        closeOnBackdrop={false}
-      >
-        <div className="space-y-4 text-center">
-          {rewardToUse && (
-            <div className="rounded-2xl border border-[#f3cf8c] bg-[#fff8dc] p-4 ">
-              <div className="-mb-4 -mt-7 flex justify-center">
-                <div className="relative h-32 w-32">
-                  <Image
-                    src="/images/logo.png"
-                    alt="Logo XingFuCha"
-                    fill
-                    sizes="150px"
-                    className="object-contain"
-                  />
-                </div>
-              </div>
-              <p className="text-2xl  font-black text-[#d81b21]">
-                {rewardToUse.label}
-              </p>
-              <div className="mt-3 space-y-2">
-                {getRewardConditionNote(rewardToUse) && (
-                  <div className="mt-2 rounded-xl border border-[#f3cf8c] bg-[#fff8dc] px-3 py-2 text-xs font-semibold text-[#8f111a]">
-                    {getRewardConditionNote(rewardToUse)}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (useRewardLoading) return;
-                setConfirmUseOpen(false);
-                setRewardToUse(null);
-              }}
-              disabled={useRewardLoading}
-              className="rounded-2xl border border-[#d81b21]/20 bg-white px-4 py-3 text-sm font-bold text-[#8f111a] disabled:opacity-60"
-            >
-              Quay lại
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!rewardToUse) return;
-                void handleUseReward(rewardToUse.id);
-              }}
-              disabled={useRewardLoading || !rewardToUse}
-              className="rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
-            >
-              {useRewardLoading ? "Đang xác nhận..." : "Xác nhận dùng"}
-            </button>
-          </div>
-        </div>
       </Modal>
 
       <Modal
