@@ -11,9 +11,12 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "XingFuCha Spin & Win",
+  title: "Vòng Xing May Mắn",
   description:
     "A gamified landing page for XingFuCha beverage brand featuring a spin-the-wheel reward system.",
+  icons: {
+    icon: "/logo.jpg",
+  },
 };
 
 export default function RootLayout({
