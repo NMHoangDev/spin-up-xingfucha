@@ -1291,17 +1291,14 @@ export default function PageContent() {
 
       <Modal
         open={usedVoucherOpen}
-        title="Voucher Đã Được Sử Dụng"
+        title="Đã sử dụng voucher"
         closeOnBackdrop={false}
       >
         <div className="space-y-4 text-center">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 ring-4 ring-emerald-50">
             <CheckCircle2 size={34} className="text-emerald-600" />
           </div>
-          <p className="text-sm font-semibold leading-6 text-[#6c1a1f] bg-white p-2 rounded-xl text-justify">
-            Vui lòng cho nhân viên kiểm tra để hoàn tất. Hãy đảm bảo đưa cho
-            nhân viên check trước khi xác nhận nhé.
-          </p>
+
           {usedVoucherInfo && (
             <div className="rounded-2xl border border-[#f3cf8c] bg-[#fff8dc] p-4">
               <div className="-mb-4 -mt-8 flex justify-center">
@@ -1336,7 +1333,7 @@ export default function PageContent() {
             }}
             className="w-full rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white"
           >
-            Đã đưa cho nhân viên
+            Đóng
           </button>
         </div>
       </Modal>
