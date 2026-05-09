@@ -253,6 +253,7 @@ export default function PageContent() {
   const channelRef = useRef<BroadcastChannel | null>(null);
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
   const buttonSectionRef = useRef<HTMLDivElement | null>(null);
+  const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
 
   useEffect(() => {
     setWallet(
@@ -438,8 +439,15 @@ export default function PageContent() {
     persistWallet({ items, updatedAt: receivedAt });
   };
 
-  async function handleSpinSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  const readProfileFromState = () => ({
+    name: userInfo.name.trim(),
+    phone: userInfo.phone.trim(),
+  });
+
+  const isProfileValid = (profile: { name: string; phone: string }) =>
+    Boolean(profile.name && profile.phone && phoneRegex.test(profile.phone));
+
+  async function submitSpin(name: string, phone: string) {
     setFormError("");
     if (!fingerprint || !fingerprintReady)
       return setFormError(
@@ -449,12 +457,6 @@ export default function PageContent() {
       return setFormError(
         `Khách hàng này đã dùng hết ${quota?.maxSpinsToday ?? 0} lượt quay hôm nay.`,
       );
-    const name = userInfo.name.trim();
-    const phone = userInfo.phone.trim();
-    if (!name || !phone)
-      return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
-    if (!/^(0|84)(3|5|7|8|9)([0-9]{8})$/.test(phone))
-      return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
     setLoading(true);
     try {
       const res = await fetch("/api/spin", {
@@ -507,6 +509,23 @@ export default function PageContent() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSpinSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const profile = readProfileFromState();
+    if (!profile.name || !profile.phone)
+      return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
+    if (!phoneRegex.test(profile.phone))
+      return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
+    await submitSpin(profile.name, profile.phone);
+  }
+
+  async function handleSpinStart() {
+    if (isSpinning || localSpinBlocked) return;
+    const profile = readProfileFromState();
+    if (isProfileValid(profile)) return submitSpin(profile.name, profile.phone);
+    setPreSpinOpen(true);
   }
 
   async function handleUseReward(rewardId: number) {
@@ -850,9 +869,7 @@ export default function PageContent() {
               {/* Button luôn render trước */}
               <button
                 type="button"
-                onClick={() =>
-                  !isSpinning && !localSpinBlocked && setPreSpinOpen(true)
-                }
+                onClick={handleSpinStart}
                 disabled={
                   isSpinning ||
                   !fingerprintReady ||
