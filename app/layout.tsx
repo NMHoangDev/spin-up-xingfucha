@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   description:
     "A gamified landing page for XingFuCha beverage brand featuring a spin-the-wheel reward system.",
   icons: {
-    icon: "/logo.jpg",
+    icon: "/images/logo.webp",
   },
 };
 
