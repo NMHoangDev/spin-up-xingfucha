@@ -1,8 +1,7 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import FingerprintJS from "@fingerprintjs/fingerprintjs";
 import { AnimatePresence, motion } from "motion/react";
 import confetti from "canvas-confetti";
 import {
@@ -17,8 +16,10 @@ import {
   X,
 } from "lucide-react";
 
-import logoJpg from "@/assets/logo.jpg";
+import logoWebp from "@/assets/logo.webp";
 import { REWARDS, type Reward } from "@/lib/rewards/rewards";
+import { selectWeightedReward } from "@/lib/rewards/reward.service";
+import { runWithCrossTabStorageLock } from "@/lib/spins/cross-tab-lock";
 
 type UserInfo = { name: string; phone: string };
 type ActiveTab = "spin" | "rewards";
@@ -32,6 +33,8 @@ type WalletItem = SpinReward & {
   firstWonAt: string;
   lastWonAt: string;
   lastUsedAt?: string | null;
+  voucherCodes?: string[];
+  locationId?: string;
 };
 type WalletStore = { items: WalletItem[]; updatedAt: string };
 type SavedProfile = { name: string; phone: string };
@@ -43,12 +46,16 @@ type DailyQuotaStore = {
 };
 
 const WALLET_KEY = "xfc-wallet-v2";
-const DAILY_QUOTA_KEY = "xfc-daily-quota-v2";
+/** 3 lượt quay / ngày (theo ngày lịch trình duyệt), chỉ lưu localStorage */
+const MAX_SPINS_PER_DAY = 3;
+const DAILY_QUOTA_KEY = "xfc-daily-quota-v3";
 const ACTIVE_TAB_KEY = "xfc-active-tab-v1";
 const PROFILE_KEY = "xfc-profile-v1";
 const DAILY_USAGE_KEY = "xfc-daily-usage-v2";
 const CHANNEL_KEY = "xfc-spin-sync-v2";
 const WALLET_COOKIE = "xfc_wallet_summary";
+/** Không còn phân chi nhánh — giá trị cố định lưu kèm voucher trong ví (local). */
+const DEFAULT_PLAY_LOCATION = "chung";
 
 const rewardVisuals: Record<
   number,
@@ -75,12 +82,25 @@ const rewardVisuals: Record<
   },
 };
 
+/** Ngày theo múi giờ máy khách (YYYY-MM-DD) — reset lượt quay & dùng voucher theo ngày lịch */
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
+function stripVietnameseTones(input: string): string {
+  const normalized = input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return normalized.replace(/đ/g, "d").replace(/Đ/g, "d").toLowerCase();
+}
+
+/** `tenkhongdaukhoangtrang_sodienthoai` — ví dụ nguyenminhhoang_0987264135 */
 function createProfileKey(name: string, phone: string) {
-  return `${name.trim().replace(/\s+/g, " ").toLocaleLowerCase("vi-VN")}::${phone.replace(/\D/g, "")}`;
+  const digits = phone.replace(/\D/g, "");
+  const namePart = stripVietnameseTones(name.trim()).replace(/\s+/g, "");
+  return `${namePart}_${digits}`;
 }
 
 function formatTime(value?: string | null) {
@@ -131,9 +151,13 @@ function readJson<T>(key: string): T | null {
   }
 }
 
-function readQuota() {
-  const stored = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
-  return stored?.day === todayKey() ? stored : null;
+function generateLocalVoucherCode(productCode: string) {
+  const base = productCode.replace(/\s+/g, "-").toUpperCase();
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+  return `XFC-${base}-${suffix}`;
 }
 
 function readUsedRewardCount() {
@@ -193,7 +217,7 @@ function Modal({
           <motion.div
             className="relative z-10 w-full max-w-sm rounded-[28px] p-6 shadow-2xl"
             style={{
-              backgroundImage: "url('/images/background.png')",
+              backgroundImage: "url('/images/background.webp')",
               backgroundSize: "cover",
               backgroundPosition: "center",
             }}
@@ -233,8 +257,6 @@ export default function PageContent() {
   const [quota, setQuota] = useState<DailyQuotaStore | null>(null);
   const [showQuota, setShowQuota] = useState(false);
   const [usedRewardCount, setUsedRewardCount] = useState(0);
-  const [fingerprint, setFingerprint] = useState<string | null>(null);
-  const [fingerprintReady, setFingerprintReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
@@ -250,6 +272,7 @@ export default function PageContent() {
     null,
   );
   const [useRewardLoading, setUseRewardLoading] = useState(false);
+  const [localDataReady, setLocalDataReady] = useState(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
   const buttonSectionRef = useRef<HTMLDivElement | null>(null);
@@ -259,24 +282,92 @@ export default function PageContent() {
     setWallet(
       readJson<WalletStore>(WALLET_KEY) ?? { items: [], updatedAt: "" },
     );
-    setQuota(readQuota());
+    const t = todayKey();
+    const raw = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
+    let nextQuota: DailyQuotaStore;
+    if (!raw || raw.day !== t) {
+      nextQuota = {
+        day: t,
+        spinsUsedToday: 0,
+        maxSpinsToday: MAX_SPINS_PER_DAY,
+      };
+      window.localStorage.setItem(
+        DAILY_QUOTA_KEY,
+        JSON.stringify(nextQuota),
+      );
+    } else {
+      nextQuota = {
+        day: raw.day,
+        spinsUsedToday: Math.min(
+          Math.max(0, Number(raw.spinsUsedToday ?? 0)),
+          MAX_SPINS_PER_DAY,
+        ),
+        maxSpinsToday: MAX_SPINS_PER_DAY,
+        ...(raw.profileKey ? { profileKey: raw.profileKey } : {}),
+      };
+      window.localStorage.setItem(
+        DAILY_QUOTA_KEY,
+        JSON.stringify(nextQuota),
+      );
+    }
+    setQuota(nextQuota);
     setUsedRewardCount(readUsedRewardCount());
     const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
     if (savedProfile) setUserInfo(savedProfile);
     const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
     if (savedTab === "spin" || savedTab === "rewards") setActiveTab(savedTab);
-    if (!("BroadcastChannel" in window)) return;
-    const channel = new BroadcastChannel(CHANNEL_KEY);
-    channelRef.current = channel;
-    channel.onmessage = (event) => {
-      if (event.data?.type === "wallet")
-        setWallet(event.data.payload as WalletStore);
-      if (event.data?.type === "quota")
-        setQuota(event.data.payload as DailyQuotaStore | null);
-      if (event.data?.type === "used-count")
-        setUsedRewardCount(Number(event.data.payload ?? 0));
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(CHANNEL_KEY);
+      channelRef.current = channel;
+      channel.onmessage = (event) => {
+        if (event.data?.type === "wallet")
+          setWallet(event.data.payload as WalletStore);
+        if (event.data?.type === "quota")
+          setQuota(event.data.payload as DailyQuotaStore | null);
+        if (event.data?.type === "used-count")
+          setUsedRewardCount(Number(event.data.payload ?? 0));
+      };
+    }
+    setLocalDataReady(true);
+    return () => {
+      channelRef.current?.close();
+      channelRef.current = null;
     };
-    return () => channel.close();
+  }, []);
+
+  /** Tab khác ghi localStorage → đồng bộ state (bổ sung cho BroadcastChannel). */
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.storageArea !== window.localStorage) return;
+      if (e.key === WALLET_KEY && e.newValue) {
+        try {
+          setWallet(JSON.parse(e.newValue) as WalletStore);
+        } catch {
+          /* empty */
+        }
+      }
+      if (e.key === DAILY_QUOTA_KEY) {
+        if (!e.newValue) setQuota(null);
+        else {
+          try {
+            setQuota(JSON.parse(e.newValue) as DailyQuotaStore);
+          } catch {
+            /* empty */
+          }
+        }
+      }
+      if (e.key === DAILY_USAGE_KEY && e.newValue) {
+        try {
+          const o = JSON.parse(e.newValue) as { day: string; count: number };
+          if (o.day === todayKey())
+            setUsedRewardCount(Math.max(0, Number(o.count ?? 0)));
+        } catch {
+          /* empty */
+        }
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
   // Thêm useEffect này sau các useEffect khác
   useEffect(() => {
@@ -289,28 +380,6 @@ export default function PageContent() {
     });
     promise.then(() => setShowQuota(true));
   }, []);
-  useEffect(() => {
-    let mounted = true;
-    async function loadFingerprint() {
-      try {
-        const fp = await FingerprintJS.load();
-        const result = await fp.get();
-        if (mounted) setFingerprint(result.visitorId);
-      } catch {
-        if (mounted)
-          setFormError(
-            "Không thể xác minh thiết bị lúc này. Vui lòng tải lại trang.",
-          );
-      } finally {
-        if (mounted) setFingerprintReady(true);
-      }
-    }
-    void loadFingerprint();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   useEffect(() => {
     window.sessionStorage.setItem(ACTIVE_TAB_KEY, activeTab);
   }, [activeTab]);
@@ -373,11 +442,11 @@ export default function PageContent() {
     [wallet.items],
   );
 
-  const currentProfileKey = createProfileKey(userInfo.name, userInfo.phone);
-  const localSpinBlocked =
+  /** Giới hạn lượt quay theo localStorage + ngày lịch */
+  const hasReachedSpinLimit =
     quota?.day === todayKey() &&
-    quota.profileKey === currentProfileKey &&
     quota.spinsUsedToday >= quota.maxSpinsToday;
+  const localSpinBlocked = hasReachedSpinLimit;
 
   const persistWallet = (nextWallet: WalletStore) => {
     setWallet(nextWallet);
@@ -407,7 +476,11 @@ export default function PageContent() {
     channelRef.current?.postMessage({ type: "used-count", payload: count });
   };
 
-  const addRewardToWallet = (reward: SpinReward, receivedAt: string) => {
+  const addRewardToWallet = (
+    reward: SpinReward,
+    receivedAt: string,
+    spinMeta?: { voucherCode?: string; locationId?: string },
+  ) => {
     const current = readJson<WalletStore>(WALLET_KEY) ?? {
       items: [],
       updatedAt: "",
@@ -424,6 +497,10 @@ export default function PageContent() {
                   reward.voucherUsableFrom ?? item.voucherUsableFrom ?? null,
                 voucherExpiresAt:
                   reward.voucherExpiresAt ?? item.voucherExpiresAt ?? null,
+                voucherCodes: spinMeta?.voucherCode
+                  ? [...(item.voucherCodes ?? []), spinMeta.voucherCode]
+                  : item.voucherCodes,
+                locationId: spinMeta?.locationId ?? item.locationId,
               }
             : item,
         )
@@ -434,6 +511,8 @@ export default function PageContent() {
             quantity: 1,
             firstWonAt: receivedAt,
             lastWonAt: receivedAt,
+            voucherCodes: spinMeta?.voucherCode ? [spinMeta.voucherCode] : [],
+            locationId: spinMeta?.locationId,
           },
         ];
     persistWallet({ items, updatedAt: receivedAt });
@@ -449,55 +528,81 @@ export default function PageContent() {
 
   async function submitSpin(name: string, phone: string) {
     setFormError("");
-    if (!fingerprint || !fingerprintReady)
-      return setFormError(
-        "Đang xác minh thiết bị, vui lòng thử lại sau ít giây.",
-      );
-    if (localSpinBlocked)
-      return setFormError(
-        `Khách hàng này đã dùng hết ${quota?.maxSpinsToday ?? 0} lượt quay hôm nay.`,
-      );
     setLoading(true);
     try {
-      const res = await fetch("/api/spin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, deviceFingerprint: fingerprint }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 409 && data?.code === "DAILY_USER_LIMIT_REACHED") {
-          persistQuota({
-            day: todayKey(),
-            spinsUsedToday: Number(data?.maxSpinsToday ?? 0),
-            maxSpinsToday: Number(data?.maxSpinsToday ?? 5),
-            profileKey: createProfileKey(name, phone),
-          });
-          return setFormError(
-            data?.error ??
-              `Khách hàng này đã dùng hết ${Number(data?.maxSpinsToday ?? 5)} lượt quay hôm nay.`,
-          );
+      type SpinOk = {
+        duration: number;
+        target: number;
+        spinReward: SpinReward;
+      };
+      const outcome = await runWithCrossTabStorageLock((): SpinOk | "limit" => {
+        const t = todayKey();
+        const rawQ = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
+        const q: DailyQuotaStore =
+          rawQ && rawQ.day === t
+            ? {
+                day: t,
+                spinsUsedToday: Math.min(
+                  Math.max(0, Number(rawQ.spinsUsedToday ?? 0)),
+                  MAX_SPINS_PER_DAY,
+                ),
+                maxSpinsToday: MAX_SPINS_PER_DAY,
+                ...(rawQ.profileKey ? { profileKey: rawQ.profileKey } : {}),
+              }
+            : {
+                day: t,
+                spinsUsedToday: 0,
+                maxSpinsToday: MAX_SPINS_PER_DAY,
+              };
+        if (q.spinsUsedToday >= q.maxSpinsToday) {
+          persistQuota(q);
+          return "limit";
         }
-        throw new Error(data?.error ?? "Không thể quay thưởng lúc này.");
-      }
-      const index = Number(data.rewardIndex ?? 0);
-      const angle = 360 / REWARDS.length;
-      const extraSpins = 6 + Math.floor(Math.random() * 3);
-      const offset = (Math.random() - 0.5) * (angle * 0.42);
-      const target =
-        extraSpins * 360 + (360 - (index * angle + angle / 2)) + offset;
-      const receivedAt = new Date().toISOString();
-      setDuration(3000 + Math.floor(Math.random() * 800));
-      setRotation((prev) => prev + target - (prev % 360));
-      setRewardResult(data.reward as SpinReward);
-      persistProfile({ name, phone });
-      addRewardToWallet(data.reward as SpinReward, receivedAt);
-      persistQuota({
-        day: todayKey(),
-        spinsUsedToday: Number(data?.limits?.spinsUsedToday ?? 1),
-        maxSpinsToday: Number(data?.limits?.maxSpinsToday ?? 5),
-        profileKey: createProfileKey(name, phone),
+        const { reward, index } = selectWeightedReward();
+        const now = new Date();
+        const expiresAt = new Date(now.getTime());
+        expiresAt.setMonth(expiresAt.getMonth() + 1);
+        const usableFromIso = now.toISOString();
+        const expiresIso = expiresAt.toISOString();
+        const voucherCode = generateLocalVoucherCode(
+          reward.code ?? String(reward.id),
+        );
+        const spinReward: SpinReward = {
+          ...reward,
+          voucherDelayMinutes: 0,
+          voucherUsableFrom: usableFromIso,
+          voucherExpiresAt: expiresIso,
+        };
+        const angle = 360 / REWARDS.length;
+        const extraSpins = 6 + Math.floor(Math.random() * 3);
+        const offset = (Math.random() - 0.5) * (angle * 0.42);
+        const target =
+          extraSpins * 360 + (360 - (index * angle + angle / 2)) + offset;
+        const receivedAt = now.toISOString();
+        const duration = 3000 + Math.floor(Math.random() * 800);
+        persistProfile({ name, phone });
+        addRewardToWallet(spinReward, receivedAt, {
+          voucherCode,
+          locationId: DEFAULT_PLAY_LOCATION,
+        });
+        persistQuota({
+          day: t,
+          spinsUsedToday: q.spinsUsedToday + 1,
+          maxSpinsToday: MAX_SPINS_PER_DAY,
+          profileKey: createProfileKey(name, phone),
+        });
+        return { duration, target, spinReward };
       });
+
+      if (outcome === "limit") {
+        setFormError(
+          `Đã dùng hết ${MAX_SPINS_PER_DAY} lượt quay hôm nay cho thiết bị này.`,
+        );
+        return;
+      }
+      setDuration(outcome.duration);
+      setRotation((prev) => prev + outcome.target - (prev % 360));
+      setRewardResult(outcome.spinReward);
       setPreSpinOpen(false);
       setIsSpinning(true);
     } catch (error) {
@@ -524,7 +629,10 @@ export default function PageContent() {
   async function handleSpinStart() {
     if (isSpinning || localSpinBlocked) return;
     const profile = readProfileFromState();
-    if (isProfileValid(profile)) return submitSpin(profile.name, profile.phone);
+    if (isProfileValid(profile)) {
+      await submitSpin(profile.name, profile.phone);
+      return;
+    }
     setPreSpinOpen(true);
   }
 
@@ -534,43 +642,50 @@ export default function PageContent() {
       return setFormError(
         "Chưa tìm thấy thông tin người chơi để sử dụng voucher.",
       );
-    if (usedRewardCount >= 3)
-      return setFormError(
-        "Bạn đã dùng đủ 3 voucher trong hôm nay, chưa thể dùng thêm.",
-      );
     setUseRewardLoading(true);
     try {
-      const current = readJson<WalletStore>(WALLET_KEY) ?? {
-        items: [],
-        updatedAt: "",
-      };
-      const consumedReward = current.items.find((item) => item.id === rewardId);
+      const consumedMeta = await runWithCrossTabStorageLock(() => {
+        const usedToday = readUsedRewardCount();
+        if (usedToday >= 3) {
+          throw new Error(
+            "Bạn đã dùng đủ 3 voucher trong hôm nay, chưa thể dùng thêm.",
+          );
+        }
+        const current = readJson<WalletStore>(WALLET_KEY) ?? {
+          items: [],
+          updatedAt: "",
+        };
+        const consumedReward = current.items.find(
+          (item) => item.id === rewardId,
+        );
+        const voucherCode = consumedReward?.voucherCodes?.[0];
+        if (!voucherCode) {
+          throw new Error("Không tìm thấy mã voucher để sử dụng.");
+        }
 
-      const res = await fetch("/api/spins", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "consume-one",
-          phone: savedProfile.phone,
-          rewardId,
-        }),
+        const usedAt = new Date().toISOString();
+        const nextItems = current.items
+          .map((item) =>
+            item.id === rewardId
+              ? {
+                  ...item,
+                  quantity: item.quantity - 1,
+                  lastUsedAt: usedAt,
+                  voucherCodes: (item.voucherCodes ?? []).slice(1),
+                }
+              : item,
+          )
+          .filter((item) => item.quantity > 0);
+        persistWallet({
+          items: nextItems,
+          updatedAt: new Date().toISOString(),
+        });
+        persistUsedRewardCount(usedToday + 1);
+        return { consumedReward: consumedReward ?? null };
       });
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error(data?.error ?? "Không thể sử dụng voucher lúc này.");
 
-      const usedAt = data?.data?.usedAt ?? new Date().toISOString();
-      const nextItems = current.items
-        .map((item) =>
-          item.id === rewardId
-            ? { ...item, quantity: item.quantity - 1, lastUsedAt: usedAt }
-            : item,
-        )
-        .filter((item) => item.quantity > 0);
-      persistWallet({ items: nextItems, updatedAt: new Date().toISOString() });
-      persistUsedRewardCount(usedRewardCount + 1);
       setFormError("");
-      setUsedVoucherInfo(consumedReward || null);
+      setUsedVoucherInfo(consumedMeta.consumedReward);
       setUsedVoucherOpen(true);
     } catch (error) {
       setFormError(
@@ -589,11 +704,28 @@ export default function PageContent() {
     setActiveTab("rewards");
   }
 
+  if (!localDataReady) {
+    return (
+      <main className="relative min-h-screen overflow-hidden bg-[#f7ead1] text-[#571017]">
+        <Modal open={true} title="Đang tải" closeOnBackdrop={false}>
+          <div className="space-y-3 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#d81b21]/10 text-[#d81b21]">
+              <Lock size={24} />
+            </div>
+            <p className="text-sm font-semibold text-[#6c1a1f]">
+              Đang đọc dữ liệu đã lưu trên máy của bạn…
+            </p>
+          </div>
+        </Modal>
+      </main>
+    );
+  }
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f7ead1] text-[#571017]">
       <div className="absolute inset-0">
         <Image
-          src="/images/background.png"
+          src="/images/background.webp"
           alt="Background XingFuCha"
           fill
           priority
@@ -607,7 +739,7 @@ export default function PageContent() {
         <header
           className="rounded-[30px] border border-white/70 p-4 shadow-[0_20px_40px_rgba(120,24,30,0.08)] backdrop-blur"
           style={{
-            backgroundImage: "url('/images/background.png')",
+            backgroundImage: "url('/images/background.webp')",
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}
@@ -616,7 +748,7 @@ export default function PageContent() {
             <div className="flex items-center gap-3">
               <div className="relative h-14 w-14 overflow-hidden rounded-full border-2 border-white bg-transparent ">
                 <Image
-                  src={logoJpg}
+                  src={logoWebp}
                   alt="Logo XingFuCha"
                   fill
                   sizes="64px"
@@ -629,7 +761,7 @@ export default function PageContent() {
                 </p>
                 <div className="mt-0.5 h-5 w-20 flex items-center -ml-1">
                   <Image
-                    src="/images/logo_text.png"
+                    src="/images/logo_text.webp"
                     alt="XingFuCha"
                     width={80}
                     height={20}
@@ -652,6 +784,7 @@ export default function PageContent() {
               <span className="font-bold">SĐT:</span>{" "}
               {userInfo.phone.trim() || "Chưa cập nhật"}
             </p>
+            
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1.5">
@@ -674,14 +807,14 @@ export default function PageContent() {
               ref={spinSectionRef}
               className="relative mt-6 rounded-[34px] px-3 sm:px-4 pb-6 pt-7 shadow-[0_24px_48px_rgba(120,24,30,0.12)]"
               style={{
-                backgroundImage: "url('/images/nenchosectionvongquay.jpg')",
+                backgroundImage: "url('/images/nenchosectionvongquay.webp')",
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }}
             >
               <div className="relative mx-auto h-[112px] max-w-[320px]">
                 <Image
-                  src="/images/text.png"
+                  src="/images/text.webp"
                   alt="Vòng Xing May Mắn"
                   width={320}
                   height={112}
@@ -691,7 +824,7 @@ export default function PageContent() {
 
                 <div className="pointer-events-none absolute -top-0 -left-6 h-[50px] w-[50px] sm:h-[48px] sm:w-[48px]">
                   <Image
-                    src="/images/vuongmien.png"
+                    src="/images/vuongmien.webp"
                     alt="Vương miện trang trí"
                     fill
                     sizes="50px"
@@ -701,7 +834,7 @@ export default function PageContent() {
 
                 <div className="pointer-events-none absolute left-[-20px] top-[50px] h-[100px] w-[100px] sm:h-[30px] sm:w-[30px]">
                   <Image
-                    src="/images/blinkicon.png"
+                    src="/images/blinkicon.webp"
                     alt="Hiệu ứng lấp lánh"
                     fill
                     sizes="100px"
@@ -711,7 +844,7 @@ export default function PageContent() {
 
                 <div className="pointer-events-none absolute -right-8 top-8 h-[100px] w-[100px] sm:h-[72px] sm:w-[72px]">
                   <Image
-                    src="/images/hopquafull.png"
+                    src="/images/hopquafull.webp"
                     alt="Hộp quà trang trí"
                     fill
                     sizes="100px"
@@ -720,7 +853,7 @@ export default function PageContent() {
                 </div>
                 <div className="pointer-events-none absolute right-4 -top-10 h-[70px] w-[70px] sm:h-[72px] sm:w-[72px]">
                   <Image
-                    src="/images/blink2.png"
+                    src="/images/blink2.webp"
                     alt="Hộp quà trang trí"
                     fill
                     sizes="70px"
@@ -732,7 +865,7 @@ export default function PageContent() {
               {/* Wrapper relative để các icon absolute tràn ra ngoài */}
               <div className="relative mx-auto mt-2 w-full max-w-[420px] sm:max-w-[460px] h-[420px] sm:h-[460px]">
                 <Image
-                  src="/images/khungvongquay.png"
+                  src="/images/khungvongquay.webp"
                   alt="Khung vòng quay"
                   fill
                   sizes="(max-width: 640px) 420px, 460px"
@@ -747,7 +880,7 @@ export default function PageContent() {
                   className="absolute left-1/2 top-1/2 h-[290px] w-[290px] sm:h-[310px] sm:w-[310px] -translate-x-1/2 -translate-y-[64%] rounded-full"
                 >
                   <Image
-                    src="/images/vongtron.png"
+                    src="/images/vongtron.webp"
                     alt="Mặt vòng quay"
                     fill
                     sizes="(max-width: 640px) 290px, 310px"
@@ -758,7 +891,7 @@ export default function PageContent() {
                 {/* Mũi tên */}
                 <div className="pointer-events-none absolute left-1/2 top-1/2 mt-2 z-20 h-[80px] w-[80px] -translate-x-1/2 -translate-y-[120%]">
                   <Image
-                    src="/images/muiten.png"
+                    src="/images/muiten.webp"
                     alt="Mũi tên vòng quay"
                     fill
                     sizes="180px"
@@ -776,7 +909,7 @@ export default function PageContent() {
                   }}
                 >
                   <Image
-                    src="/images/iconnguongmo.png"
+                    src="/images/iconnguongmo.webp"
                     alt="Gấu dễ thương nhìn lên vòng quay"
                     fill
                     sizes="100px"
@@ -795,7 +928,7 @@ export default function PageContent() {
                   }}
                 >
                   <Image
-                    src="/images/HopQua.png"
+                    src="/images/HopQua.webp"
                     alt="Hộp quà"
                     fill
                     sizes="155px"
@@ -814,7 +947,7 @@ export default function PageContent() {
                   }}
                 >
                   <Image
-                    src="/images/tui3gang.png"
+                    src="/images/tui3gang.webp"
                     alt="Túi 3 gáy"
                     fill
                     sizes="100px"
@@ -833,7 +966,7 @@ export default function PageContent() {
                   }}
                 >
                   <Image
-                    src="/images/quat.png"
+                    src="/images/quat.webp"
                     alt="Quạt"
                     fill
                     sizes="90px"
@@ -852,7 +985,7 @@ export default function PageContent() {
                   }}
                 >
                   <Image
-                    src="/images/binhnuoc.png"
+                    src="/images/binhnuoc.webp"
                     alt="Bình nước"
                     fill
                     sizes="90px"
@@ -870,21 +1003,14 @@ export default function PageContent() {
               <button
                 type="button"
                 onClick={handleSpinStart}
-                disabled={
-                  isSpinning ||
-                  !fingerprintReady ||
-                  !fingerprint ||
-                  localSpinBlocked
-                }
+                disabled={isSpinning || localSpinBlocked}
                 className="w-full mt-6 rounded-[24px] border-2 border-white bg-[#d81b21] px-8 py-4 text-2xl font-black text-[#f2f6dd] shadow-[0_8px_0_rgb(139,25,32)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
               >
                 {isSpinning
                   ? "Đang quay..."
-                  : localSpinBlocked
+                  : hasReachedSpinLimit
                     ? "Đã hết lượt quay hôm nay"
-                    : !fingerprintReady || !fingerprint
-                      ? "Đang xác minh thiết bị..."
-                      : "Quay ngay"}
+                    : "Quay ngay"}
               </button>
 
               {formError && (
@@ -939,7 +1065,7 @@ export default function PageContent() {
                     <div className="flex items-center gap-3">
                       <div className="relative h-26 w-26 flex-shrink-0">
                         <Image
-                          src="/images/logo.png"
+                          src="/images/logo.webp"
                           alt="Logo XingFuCha"
                           fill
                           sizes="64px"
@@ -1061,7 +1187,7 @@ export default function PageContent() {
                 }}
               >
                 <Image
-                  src="/images/hopquafull.png"
+                  src="/images/hopquafull.webp"
                   alt="Hộp quà đóng"
                   fill
                   sizes="680px"
@@ -1092,7 +1218,7 @@ export default function PageContent() {
                 }}
               >
                 <Image
-                  src="/images/hopquakhongnap.png"
+                  src="/images/hopquakhongnap.webp"
                   alt="Hộp quà không nắp"
                   fill
                   sizes="560px"
@@ -1123,7 +1249,7 @@ export default function PageContent() {
                 }}
               >
                 <Image
-                  src="/images/napqua.png"
+                  src="/images/napqua.webp"
                   alt="Nắp quà"
                   fill
                   sizes="500px"
@@ -1211,7 +1337,7 @@ export default function PageContent() {
           </div>
           <button
             type="submit"
-            disabled={loading || !fingerprintReady || !fingerprint}
+            disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#d81b21] py-4 font-bold text-white shadow-lg disabled:opacity-60"
           >
             {loading ? "Đang xử lý..." : "Bắt đầu quay"}
@@ -1242,7 +1368,7 @@ export default function PageContent() {
               >
                 <div className="relative h-40 w-40 -mt-12">
                   <Image
-                    src="/images/logo.png"
+                    src="/images/logo.webp"
                     alt="Logo XingFuCha"
                     fill
                     sizes="120px"
@@ -1321,7 +1447,7 @@ export default function PageContent() {
               <div className="-mb-4 -mt-8 flex justify-center">
                 <div className="relative h-32 w-32">
                   <Image
-                    src="/images/logo.png"
+                    src="/images/logo.webp"
                     alt="Logo XingFuCha"
                     fill
                     sizes="150px"
