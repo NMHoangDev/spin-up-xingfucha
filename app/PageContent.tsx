@@ -581,7 +581,7 @@ export default function PageContent() {
         const { reward, index } = selectWeightedReward();
         const now = new Date();
         const year = now.getFullYear();
-        const usableFromIso = new Date(year, 5, 1, 0, 0, 0).toISOString(); // June 1st
+        const usableFromIso = now.toISOString(); // From the day they spin
         const expiresIso = new Date(year, 5, 15, 23, 59, 59, 999).toISOString(); // June 15th
         const voucherCode = generateLocalVoucherCode(
           reward.code ?? String(reward.id),

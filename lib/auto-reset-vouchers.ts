@@ -19,7 +19,7 @@ type Wallet = {
 const APP_VERSION_KEY = "xfc-app-version";
 const WALLET_KEY = "xfc-wallet-v2";
 const DEPLOYMENT_VERSION =
-  process.env.NEXT_PUBLIC_DEPLOYMENT_VERSION || "2026-05-30-v4";
+  process.env.NEXT_PUBLIC_DEPLOYMENT_VERSION || "2026-05-30-v5";
 
 export function initializeAutoReset() {
   if (typeof window === "undefined") return;
@@ -48,8 +48,7 @@ function resetVouchersInLocalStorage() {
     const wallet: Wallet = JSON.parse(walletData);
     const year = new Date().getFullYear();
 
-    // June 1 to June 15
-    const juneFirst = new Date(year, 5, 1, 0, 0, 0).toISOString();
+    // June 15th
     const juneFifteenth = new Date(year, 5, 15, 23, 59, 59, 999).toISOString();
 
     let resetCount = 0;
@@ -57,8 +56,8 @@ function resetVouchersInLocalStorage() {
     wallet.items = (wallet.items || []).map((item: WalletItem) => {
       if (item.type === "voucher") {
         item.voucherExpiresAt = juneFifteenth;
-        item.voucherUsableFrom = juneFirst;
-        item.firstWonAt = juneFirst;
+        // Keep original usable date if present, otherwise fallback to firstWonAt or current time
+        item.voucherUsableFrom = item.voucherUsableFrom || item.firstWonAt || new Date().toISOString();
         resetCount++;
       }
       return item;
@@ -67,7 +66,7 @@ function resetVouchersInLocalStorage() {
     wallet.updatedAt = new Date().toISOString();
     localStorage.setItem(WALLET_KEY, JSON.stringify(wallet));
 
-    console.log(`✅ Auto-reset ${resetCount} vouchers to 1/6 - 15/6`);
+    console.log(`✅ Auto-reset ${resetCount} vouchers to expire on 15/6`);
   } catch (error) {
     console.error("❌ Auto-reset error:", error);
   }
