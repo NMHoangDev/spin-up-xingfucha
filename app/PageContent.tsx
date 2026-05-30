@@ -21,6 +21,7 @@ import logoWebp from "@/assets/logo.webp";
 import { REWARDS, type Reward } from "@/lib/rewards/rewards";
 import { selectWeightedReward } from "@/lib/rewards/reward.service";
 import { runWithCrossTabStorageLock } from "@/lib/spins/cross-tab-lock";
+import { initializeAutoReset } from "@/lib/auto-reset-vouchers";
 
 type UserInfo = { name: string; phone: string };
 type ActiveTab = "spin" | "rewards";
@@ -114,6 +115,20 @@ function formatTime(value?: string | null) {
   } catch {
     return value;
   }
+}
+
+function isVoucherExpired(expiresAt?: string | null) {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() < Date.now();
+}
+
+function isVoucherNotUsableYet(usableFrom?: string | null) {
+  if (!usableFrom) return false;
+  return Date.now() < new Date(usableFrom).getTime();
+}
+
+function isSpinPeriodOver() {
+  return Date.now() > new Date(2026, 4, 31, 23, 59, 59, 999).getTime();
 }
 
 function getRewardConditionNote(reward?: { id: number } | null) {
@@ -280,6 +295,7 @@ export default function PageContent() {
   const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
 
   useEffect(() => {
+    initializeAutoReset();
     setWallet(
       readJson<WalletStore>(WALLET_KEY) ?? { items: [], updatedAt: "" },
     );
@@ -536,7 +552,10 @@ export default function PageContent() {
         target: number;
         spinReward: SpinReward;
       };
-      const outcome = await runWithCrossTabStorageLock((): SpinOk | "limit" => {
+      const outcome = await runWithCrossTabStorageLock((): SpinOk | "limit" | "ended" => {
+        if (isSpinPeriodOver()) {
+          return "ended";
+        }
         const t = todayKey();
         const rawQ = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
         const q: DailyQuotaStore =
@@ -561,10 +580,9 @@ export default function PageContent() {
         }
         const { reward, index } = selectWeightedReward();
         const now = new Date();
-        const expiresAt = new Date(now.getTime());
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-        const usableFromIso = now.toISOString();
-        const expiresIso = expiresAt.toISOString();
+        const year = now.getFullYear();
+        const usableFromIso = new Date(year, 5, 1, 0, 0, 0).toISOString(); // June 1st
+        const expiresIso = new Date(year, 5, 15, 23, 59, 59, 999).toISOString(); // June 15th
         const voucherCode = generateLocalVoucherCode(
           reward.code ?? String(reward.id),
         );
@@ -595,6 +613,10 @@ export default function PageContent() {
         return { duration, target, spinReward };
       });
 
+      if (outcome === "ended") {
+        setFormError("Chương trình quay thưởng đã kết thúc.");
+        return;
+      }
       if (outcome === "limit") {
         setFormError(
           `Đã dùng hết ${MAX_SPINS_PER_DAY} lượt quay hôm nay cho thiết bị này.`,
@@ -619,6 +641,9 @@ export default function PageContent() {
 
   async function handleSpinSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (isSpinPeriodOver()) {
+      return setFormError("Chương trình quay thưởng đã kết thúc.");
+    }
     const profile = readProfileFromState();
     if (!profile.name || !profile.phone)
       return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
@@ -628,7 +653,7 @@ export default function PageContent() {
   }
 
   async function handleSpinStart() {
-    if (isSpinning || localSpinBlocked) return;
+    if (isSpinning || localSpinBlocked || isSpinPeriodOver()) return;
     const profile = readProfileFromState();
     if (isProfileValid(profile)) {
       await submitSpin(profile.name, profile.phone);
@@ -659,6 +684,14 @@ export default function PageContent() {
         const consumedReward = current.items.find(
           (item) => item.id === rewardId,
         );
+        if (consumedReward) {
+          if (isVoucherNotUsableYet(consumedReward.voucherUsableFrom)) {
+            throw new Error("Voucher này chưa tới hạn sử dụng.");
+          }
+          if (isVoucherExpired(consumedReward.voucherExpiresAt)) {
+            throw new Error("Voucher này đã hết hạn sử dụng.");
+          }
+        }
         const voucherCode = consumedReward?.voucherCodes?.[0];
         if (!voucherCode) {
           throw new Error("Không tìm thấy mã voucher để sử dụng.");
@@ -1001,18 +1034,19 @@ export default function PageContent() {
               className="mt-5 flex flex-col gap-4"
               ref={buttonSectionRef}
             >
-              {/* Button luôn render trước */}
               <button
                 type="button"
                 onClick={handleSpinStart}
-                disabled={isSpinning || localSpinBlocked}
+                disabled={isSpinning || localSpinBlocked || isSpinPeriodOver()}
                 className="w-full mt-6 rounded-[24px] border-2 border-white bg-[#d81b21] px-8 py-4 text-2xl font-black text-[#f2f6dd] shadow-[0_8px_0_rgb(139,25,32)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
               >
                 {isSpinning
                   ? "Đang quay..."
-                  : hasReachedSpinLimit
-                    ? "Đã hết lượt quay hôm nay"
-                    : "Quay ngay"}
+                  : isSpinPeriodOver()
+                    ? "Quá hạn thời gian quay"
+                    : hasReachedSpinLimit
+                      ? "Đã hết lượt quay hôm nay"
+                      : "Quay ngay"}
               </button>
 
               {formError && (
@@ -1122,15 +1156,21 @@ export default function PageContent() {
                       disabled={
                         usedRewardCount >= 3 ||
                         item.quantity <= 0 ||
-                        useRewardLoading
+                        useRewardLoading ||
+                        isVoucherNotUsableYet(item.voucherUsableFrom) ||
+                        isVoucherExpired(item.voucherExpiresAt)
                       }
                       className="mt-3 w-full rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {useRewardLoading
                         ? "Đang xử lý..."
-                        : usedRewardCount >= 3
-                          ? "Hôm nay đã dùng đủ 3 voucher"
-                          : "Sử dụng voucher này"}
+                        : isVoucherNotUsableYet(item.voucherUsableFrom)
+                          ? "Chưa tới hạn sử dụng"
+                          : isVoucherExpired(item.voucherExpiresAt)
+                            ? "Voucher đã hết hạn"
+                            : usedRewardCount >= 3
+                              ? "Hôm nay đã dùng đủ 3 voucher"
+                              : "Sử dụng voucher này"}
                     </button>
                   </div>
                 ))}
