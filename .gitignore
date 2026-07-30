@@ -10,6 +10,9 @@ hp-task-firebase-adminsdk-fbsvc-ee802f04c3.json
 # Key Google / service account (không lên git)
 storage/permission/xinfucha_ggsheet.json
 storage/permission/xinfucha__ggsheet.json
+primeval-mark-504006-j1-2bb440fd7b56.json
+service-account*.json
+*-service-account.json
 
 # Phiên / session cục bộ — không đẩy lên git
 *.session
