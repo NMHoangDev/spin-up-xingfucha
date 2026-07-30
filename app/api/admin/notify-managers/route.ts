@@ -41,6 +41,7 @@ function buildEmailHtml(input: {
             <a href="${s.link}" style="color:#d81b21;">${s.link}</a>
           </td>
           <td style="padding:8px 12px;border:1px solid #eee;text-align:center;">
+            <div style="font-weight:700;font-size:13px;color:#111827;margin-bottom:6px;">${s.name} (${s.code})</div>
             <a href="${s.link}"><img src="cid:${s.qrCid}" alt="Mã QR ${s.name}" width="120" height="120" style="display:block;margin:0 auto;" /></a>
             <div style="font-size:11px;color:#999;margin-top:4px;">Chạm giữ / bấm phải để lưu ảnh</div>
           </td>
