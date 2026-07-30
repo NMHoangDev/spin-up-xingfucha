@@ -2,6 +2,7 @@ export type Store = {
   code: string;
   name: string;
   active: boolean;
+  managerEmail: string | null;
 };
 
 export type Prize = {

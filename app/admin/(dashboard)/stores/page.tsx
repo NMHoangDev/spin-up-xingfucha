@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type Store = { code: string; name: string; active: boolean };
+type Store = { code: string; name: string; active: boolean; managerEmail: string | null };
 
 export default function StoresPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -46,6 +46,28 @@ export default function StoresPage() {
     }
   }
 
+  async function updateManagerEmail(code: string, managerEmail: string) {
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/stores/${encodeURIComponent(code)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ managerEmail: managerEmail || null }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        throw new Error(
+          json.error === "invalid_email"
+            ? "Email không hợp lệ (nhiều email cách nhau bằng dấu phẩy)."
+            : (json.error ?? "Cập nhật thất bại."),
+        );
+      setStores((prev) => prev.map((s) => (s.code === code ? json : s)));
+    } catch (e: any) {
+      setError(e?.message ?? "Cập nhật thất bại.");
+      await load();
+    }
+  }
+
   async function createStore(event: React.FormEvent) {
     event.preventDefault();
     if (!form.code.trim() || !form.name.trim()) return;
@@ -75,7 +97,9 @@ export default function StoresPage() {
         <p className="mt-1 text-sm text-gray-600">
           Mỗi cửa hàng dùng chung một cấu hình vòng quay/điều kiện — mã cửa
           hàng gắn theo đường link quay (?store=MÃ) để gắn nhãn lượt quay khi
-          báo cáo.
+          báo cáo. Nhập email quản lý để dùng nút &quot;Thông báo đến các quản
+          lý&quot; ở Tổng quan — nhiều cửa hàng cùng email sẽ được gộp vào 1
+          email cho đúng người quản lý.
         </p>
       </div>
 
@@ -125,20 +149,21 @@ export default function StoresPage() {
               <th className="px-4 py-3 text-left">Mã</th>
               <th className="px-4 py-3 text-left">Tên/địa chỉ</th>
               <th className="px-4 py-3 text-left">Link quay</th>
+              <th className="px-4 py-3 text-left">Email quản lý</th>
               <th className="px-4 py-3 text-left">Đang hoạt động</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
                   Đang tải...
                 </td>
               </tr>
             )}
             {!loading && stores.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
                   Chưa có cửa hàng nào.
                 </td>
               </tr>
@@ -150,6 +175,18 @@ export default function StoresPage() {
                 </td>
                 <td className="px-4 py-3 text-gray-700">{s.name}</td>
                 <td className="px-4 py-3 text-gray-500">{`/?store=${s.code}`}</td>
+                <td className="px-4 py-3">
+                  <input
+                    type="text"
+                    defaultValue={s.managerEmail ?? ""}
+                    placeholder="quanly@gmail.com"
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value !== (s.managerEmail ?? "")) void updateManagerEmail(s.code, value);
+                    }}
+                    className="w-full min-w-[200px] rounded border border-transparent px-2 py-1 hover:border-gray-200 focus:border-gray-400"
+                  />
+                </td>
                 <td className="px-4 py-3">
                   <input
                     type="checkbox"

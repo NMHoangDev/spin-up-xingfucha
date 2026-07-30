@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { DailyBarChart, StoreBarChart, PrizeBarChart } from "@/components/admin/Charts";
 
-type Store = { code: string; name: string; active: boolean };
+type Store = { code: string; name: string; active: boolean; managerEmail: string | null };
+type NotifyResult = {
+  sentCount: number;
+  sent: string[];
+  failed: { managerEmail: string; error: string }[];
+  skippedNoManager: { code: string; name: string }[];
+  invalidStores: { code: string; name: string; managerEmail: string }[];
+};
 type Analytics = {
   kpis: {
     totalSpins: number;
@@ -100,6 +107,9 @@ export default function AdminDashboardPage() {
   const [search, setSearch] = useState("");
   const [loadingRows, setLoadingRows] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [notifyStep, setNotifyStep] = useState<"idle" | "confirm" | "sending" | "done">("idle");
+  const [notifyResult, setNotifyResult] = useState<NotifyResult | null>(null);
+  const [notifyError, setNotifyError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/stores")
@@ -189,6 +199,25 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function sendNotify() {
+    setNotifyStep("sending");
+    setNotifyError(null);
+    try {
+      const res = await fetch("/api/admin/notify-managers", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Gửi thông báo thất bại.");
+      setNotifyResult(json);
+      setNotifyStep("done");
+    } catch (e: any) {
+      setNotifyError(e?.message ?? "Gửi thông báo thất bại.");
+      setNotifyStep("confirm");
+    }
+  }
+
+  const storesWithManager = stores.filter((s) => s.managerEmail?.trim());
+  const managerCount = new Set(storesWithManager.map((s) => s.managerEmail)).size;
+  const storesWithoutManager = stores.length - storesWithManager.length;
+
   const pageCount = Math.max(1, Math.ceil(total / limit));
 
   return (
@@ -200,15 +229,117 @@ export default function AdminDashboardPage() {
             Số liệu khách hàng quay theo ngày, tuần, tháng — lọc theo cửa hàng.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void exportExcel()}
-          disabled={exporting}
-          className="h-10 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium disabled:opacity-50"
-        >
-          {exporting ? "Đang xuất..." : "Xuất Excel"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setNotifyError(null);
+              setNotifyResult(null);
+              setNotifyStep("confirm");
+            }}
+            className="h-10 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium"
+          >
+            Thông báo đến các quản lý
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportExcel()}
+            disabled={exporting}
+            className="h-10 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium disabled:opacity-50"
+          >
+            {exporting ? "Đang xuất..." : "Xuất Excel"}
+          </button>
+        </div>
       </div>
+
+      {notifyStep !== "idle" && (
+        <section className="rounded-xl border border-gray-200 bg-white p-4">
+          {(notifyStep === "confirm" || notifyStep === "sending") && (
+            <>
+              <h2 className="text-base font-semibold text-gray-900">
+                Gửi thông báo vòng quay đến quản lý cửa hàng?
+              </h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Sẽ gửi email (link vòng quay riêng từng cửa hàng + thời gian
+                chương trình + điều kiện + danh sách quà) tới{" "}
+                <strong>{managerCount}</strong> quản lý, phụ trách{" "}
+                <strong>{storesWithManager.length}</strong> cửa hàng đã có
+                email.
+                {storesWithoutManager > 0 && (
+                  <>
+                    {" "}
+                    Có <strong>{storesWithoutManager}</strong> cửa hàng chưa
+                    có email quản lý, sẽ bị bỏ qua — vào mục{" "}
+                    <strong>Cửa hàng</strong> để thêm.
+                  </>
+                )}
+              </p>
+              {notifyError && (
+                <p className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">
+                  {notifyError}
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void sendNotify()}
+                  disabled={notifyStep === "sending" || managerCount === 0}
+                  className="h-9 rounded-lg bg-gray-900 px-4 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {notifyStep === "sending" ? "Đang gửi..." : "Xác nhận gửi"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotifyStep("idle")}
+                  disabled={notifyStep === "sending"}
+                  className="h-9 rounded-lg border border-gray-300 px-4 text-sm"
+                >
+                  Huỷ
+                </button>
+              </div>
+            </>
+          )}
+
+          {notifyStep === "done" && notifyResult && (
+            <>
+              <h2 className="text-base font-semibold text-gray-900">
+                Kết quả gửi thông báo
+              </h2>
+              <p className="mt-1 text-sm text-green-700">
+                Đã gửi thành công tới {notifyResult.sentCount} quản lý.
+              </p>
+              {notifyResult.failed.length > 0 && (
+                <p className="mt-1 text-sm text-red-700">
+                  Gửi lỗi cho {notifyResult.failed.length} quản lý:{" "}
+                  {notifyResult.failed.map((f) => f.managerEmail).join(", ")}.
+                </p>
+              )}
+              {notifyResult.invalidStores.length > 0 && (
+                <p className="mt-1 text-sm text-amber-700">
+                  Email không hợp lệ, đã bỏ qua:{" "}
+                  {notifyResult.invalidStores
+                    .map((s) => `${s.name} (${s.managerEmail})`)
+                    .join(", ")}
+                  .
+                </p>
+              )}
+              {notifyResult.skippedNoManager.length > 0 && (
+                <p className="mt-1 text-sm text-gray-500">
+                  Chưa có email quản lý:{" "}
+                  {notifyResult.skippedNoManager.map((s) => s.name).join(", ")}.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => setNotifyStep("idle")}
+                className="mt-3 h-9 rounded-lg border border-gray-300 px-4 text-sm"
+              >
+                Đóng
+              </button>
+            </>
+          )}
+        </section>
+      )}
 
       <section className="flex flex-wrap items-center gap-4 rounded-xl border border-gray-200 bg-white p-4">
         <div className="flex gap-1">

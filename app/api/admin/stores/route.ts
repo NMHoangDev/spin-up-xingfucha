@@ -20,6 +20,7 @@ export async function GET() {
         code: row.code,
         name: row.name,
         active: row.active,
+        managerEmail: row.manager_email,
       }),
     ),
   });
@@ -58,5 +59,6 @@ export async function POST(request: Request) {
     code: data.code,
     name: data.name,
     active: data.active,
+    managerEmail: data.manager_email,
   });
 }

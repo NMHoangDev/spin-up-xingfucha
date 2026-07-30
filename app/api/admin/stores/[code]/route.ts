@@ -19,6 +19,18 @@ export async function PATCH(
   const update: Record<string, unknown> = {};
   if ("name" in body) update.name = body.name?.trim();
   if ("active" in body) update.active = body.active;
+  if ("managerEmail" in body) {
+    const raw = (body as { managerEmail?: string | null }).managerEmail;
+    const trimmed = raw?.trim() || null;
+    if (trimmed) {
+      const addresses = trimmed.split(/[,;]/).map((a) => a.trim());
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (addresses.some((a) => !emailRegex.test(a))) {
+        return NextResponse.json({ error: "invalid_email" }, { status: 400 });
+      }
+    }
+    update.manager_email = trimmed;
+  }
 
   const supabase = createSupabaseServiceClient();
   const { data, error } = await supabase
@@ -35,5 +47,6 @@ export async function PATCH(
     code: data.code,
     name: data.name,
     active: data.active,
+    managerEmail: data.manager_email,
   });
 }

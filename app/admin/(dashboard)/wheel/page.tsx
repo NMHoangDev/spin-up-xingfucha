@@ -99,7 +99,8 @@ export default function WheelFacesPage() {
         <p className="mt-1 text-sm text-gray-600">
           Tải ảnh mặt vòng quay mới, sau đó vào &quot;Chỉnh vị trí&quot; để
           chia ô và gán quà cho từng ô — hệ thống sẽ biết quay tới đâu là
-          trúng quà nào.
+          trúng quà nào. Mặt vòng quay mới mặc định có 4 ô, vào &quot;Chỉnh vị
+          trí&quot; để thêm/bớt ô và kéo chỉnh góc tuỳ ý.
         </p>
       </div>
 

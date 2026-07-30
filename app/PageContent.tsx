@@ -553,6 +553,7 @@ export default function PageContent() {
       await submitSpin(profile.name, profile.phone);
       return;
     }
+    setFormError("");
     setPreSpinOpen(true);
   }
 
@@ -970,7 +971,6 @@ export default function PageContent() {
               />
               <input
                 type="text"
-                required
                 placeholder="Nguyễn Văn A"
                 className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
                 value={userInfo.name}
@@ -991,7 +991,6 @@ export default function PageContent() {
               />
               <input
                 type="tel"
-                required
                 placeholder="0901234567"
                 className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
                 value={userInfo.phone}
@@ -1010,7 +1009,6 @@ export default function PageContent() {
                 <input
                   type="tel"
                   inputMode="numeric"
-                  required
                   placeholder={`Từ ${wheelData.minInvoiceAmount.toLocaleString("vi-VN")}đ trở lên`}
                   className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-4 pr-4 outline-none transition focus:border-[#d81b21]"
                   value={invoiceAmountInput}
@@ -1022,6 +1020,11 @@ export default function PageContent() {
               <p className="ml-1 text-xs font-medium text-gray-500">
                 Vui lòng nhập đúng số tiền trên hoá đơn để đủ điều kiện quay.
               </p>
+            </div>
+          )}
+          {formError && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm font-semibold text-red-700">
+              {formError}
             </div>
           )}
           <button

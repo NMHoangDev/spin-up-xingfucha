@@ -13,6 +13,14 @@ type SliceApi = {
 const SIZE = 320;
 const CENTER = SIZE / 2;
 const RADIUS = SIZE / 2 - 10;
+const MIN_SLICES = 2;
+const MAX_SLICES = 20;
+const DEFAULT_SLICE_COUNT = 4;
+
+function evenBoundaries(count: number) {
+  const sliceAngle = 360 / count;
+  return Array.from({ length: count }, (_, i) => i * sliceAngle);
+}
 
 function toXY(angleDeg: number, r = RADIUS) {
   const rad = (angleDeg * Math.PI) / 180;
@@ -70,10 +78,15 @@ export default function WheelCalibrator({
       if (slices.length > 0) {
         setBoundaries(slices.map((s) => s.startAngle));
         setSlicePrizes(slices.map((s) => s.prizeId));
-      } else if (activePrizes.length > 0) {
-        const n = activePrizes.length;
-        setBoundaries(activePrizes.map((_, i) => (i * 360) / n));
-        setSlicePrizes(activePrizes.map((p) => p.id));
+      } else {
+        // No slices saved yet — start from the standard 4 ô, cycling
+        // through active prizes if there are any (or unassigned if not).
+        setBoundaries(evenBoundaries(DEFAULT_SLICE_COUNT));
+        setSlicePrizes(
+          Array.from({ length: DEFAULT_SLICE_COUNT }, (_, i) =>
+            activePrizes.length > 0 ? activePrizes[i % activePrizes.length].id : null,
+          ),
+        );
       }
     } catch (e: any) {
       setError(e?.message ?? "Không tải được.");
@@ -88,7 +101,35 @@ export default function WheelCalibrator({
   }, [wheelFaceId]);
 
   const n = boundaries.length;
-  const mismatch = n > 0 && prizes.length > 0 && n !== prizes.length;
+  const [sliceCountInput, setSliceCountInput] = useState(String(n || DEFAULT_SLICE_COUNT));
+  useEffect(() => {
+    setSliceCountInput(String(n || DEFAULT_SLICE_COUNT));
+  }, [n]);
+
+  const unmappedActivePrizes = prizes.filter((p) => !slicePrizes.includes(p.id));
+
+  /** Re-splits into `count` even ô — dragging fine-tunes angles afterward.
+   * Existing slot→quà assignments are kept where the index still exists;
+   * new slots cycle through the active-prize list so nothing starts empty
+   * unless there are no active prizes at all. */
+  function setSliceCount(count: number) {
+    const clamped = Math.max(MIN_SLICES, Math.min(MAX_SLICES, Math.round(count)));
+    if (!Number.isFinite(clamped) || clamped === n) return;
+    setBoundaries(evenBoundaries(clamped));
+    setSlicePrizes(
+      Array.from({ length: clamped }, (_, i) => {
+        if (i < slicePrizes.length) return slicePrizes[i];
+        return prizes.length > 0 ? prizes[i % prizes.length].id : null;
+      }),
+    );
+    setSaved(false);
+  }
+
+  function commitSliceCountInput() {
+    const parsed = Number(sliceCountInput);
+    if (Number.isFinite(parsed)) setSliceCount(parsed);
+    else setSliceCountInput(String(n || DEFAULT_SLICE_COUNT));
+  }
 
   function regenerateEven() {
     const activeN = prizes.length;
@@ -97,7 +138,7 @@ export default function WheelCalibrator({
       setSlicePrizes([]);
       return;
     }
-    setBoundaries(prizes.map((_, i) => (i * 360) / activeN));
+    setBoundaries(evenBoundaries(activeN));
     setSlicePrizes(prizes.map((p) => p.id));
     setSaved(false);
   }
@@ -203,13 +244,47 @@ export default function WheelCalibrator({
             )}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-gray-300 px-1">
+            <span className="pl-1 text-sm text-gray-600">Số ô</span>
+            <button
+              type="button"
+              onClick={() => setSliceCount(n - 1)}
+              disabled={n <= MIN_SLICES}
+              className="h-9 w-8 text-lg text-gray-700 disabled:opacity-30"
+              title="Bớt ô"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              min={MIN_SLICES}
+              max={MAX_SLICES}
+              value={sliceCountInput}
+              onChange={(e) => setSliceCountInput(e.target.value)}
+              onBlur={commitSliceCountInput}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              className="h-9 w-12 rounded border border-transparent px-1 text-center text-sm hover:border-gray-200 focus:border-gray-400"
+            />
+            <button
+              type="button"
+              onClick={() => setSliceCount(n + 1)}
+              disabled={n >= MAX_SLICES}
+              className="h-9 w-8 text-lg text-gray-700 disabled:opacity-30"
+              title="Thêm ô"
+            >
+              +
+            </button>
+          </div>
           <button
             type="button"
             onClick={regenerateEven}
-            className="h-9 rounded-lg border border-gray-300 px-3 text-sm"
+            disabled={prizes.length === 0}
+            className="h-9 rounded-lg border border-gray-300 px-3 text-sm disabled:opacity-30"
           >
-            Chia đều lại theo {prizes.length} quà
+            Chia đều theo {prizes.length} quà
           </button>
           {!isActive && (
             <button
@@ -223,11 +298,13 @@ export default function WheelCalibrator({
         </div>
       </div>
 
-      {mismatch && (
+      {unmappedActivePrizes.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          Số ô hiện tại ({n}) khác số quà đang bật ({prizes.length}). Bấm
-          &quot;Chia đều lại&quot; để tạo lại ô theo đúng số quà, sau đó chỉnh
-          tay nếu cần.
+          Quà sau chưa được gán vào ô nào:{" "}
+          <strong>{unmappedActivePrizes.map((p) => p.label).join(", ")}</strong>.
+          {isActive
+            ? " Vì mặt vòng quay này đang được dùng, khách quay trúng (những) quà này sẽ bị lỗi — hãy gán vào ít nhất 1 ô rồi lưu lại."
+            : " Gán mỗi quà vào ít nhất 1 ô trước khi đặt mặt vòng quay này làm mặc định."}
         </div>
       )}
       {error && (
@@ -350,8 +427,7 @@ export default function WheelCalibrator({
           </h2>
           {slices.length === 0 && (
             <p className="text-sm text-gray-500">
-              Chưa có ô nào — hãy bật ít nhất 1 quà ở mục Quà tặng rồi bấm
-              &quot;Chia đều lại&quot;.
+              Chưa có ô nào — dùng bộ đếm &quot;Số ô&quot; phía trên để tạo ô.
             </p>
           )}
           <div className="space-y-2">

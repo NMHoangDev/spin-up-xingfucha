@@ -69,7 +69,11 @@ export async function POST(request: Request) {
     .order("sort_order", { ascending: true });
 
   const prizeIds = (activePrizes ?? []).map((p) => p.id);
-  const n = prizeIds.length;
+  // New faces always start at the standard 4 slices regardless of how many
+  // prizes happen to be active right now — the admin freely adds/removes
+  // slots afterward in "Chỉnh vị trí" to match their uploaded artwork.
+  const DEFAULT_SLICE_COUNT = 4;
+  const n = DEFAULT_SLICE_COUNT;
 
   const { data: wheelFace, error: insertError } = await supabase
     .from("wheel_faces")
@@ -86,17 +90,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
-  if (n > 0) {
-    const sliceAngle = 360 / n;
-    const slices = prizeIds.map((prizeId, i) => ({
-      wheel_face_id: wheelFace.id,
-      slot_index: i,
-      start_angle: i * sliceAngle,
-      end_angle: (i + 1) * sliceAngle,
-      prize_id: prizeId,
-    }));
-    await supabase.from("wheel_slices").insert(slices);
-  }
+  const sliceAngle = 360 / n;
+  const slices = Array.from({ length: n }, (_, i) => ({
+    wheel_face_id: wheelFace.id,
+    slot_index: i,
+    start_angle: i * sliceAngle,
+    end_angle: (i + 1) * sliceAngle,
+    prize_id: prizeIds.length > 0 ? prizeIds[i % prizeIds.length] : null,
+  }));
+  await supabase.from("wheel_slices").insert(slices);
 
   return NextResponse.json({
     id: wheelFace.id,

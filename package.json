@@ -27,6 +27,7 @@
     "date-fns": "^4.4.0",
     "exceljs": "^4.4.0",
     "firebase": "^12.11.0",
+    "googleapis": "^173.0.0",
     "lucide-react": "^0.553.0",
     "motion": "^12.23.24",
     "mysql2": "^3.22.0",
