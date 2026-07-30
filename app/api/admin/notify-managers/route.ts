@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import QRCode from "qrcode";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/gmail";
 
@@ -23,7 +24,7 @@ function formatVnd(amount: number): string {
 }
 
 function buildEmailHtml(input: {
-  stores: { code: string; name: string; link: string }[];
+  stores: { code: string; name: string; link: string; qrCid: string }[];
   startsAt: string | null;
   endsAt: string | null;
   minInvoiceAmount: number | null;
@@ -38,6 +39,10 @@ function buildEmailHtml(input: {
           <td style="padding:8px 12px;border:1px solid #eee;font-weight:600;">${s.name} (${s.code})</td>
           <td style="padding:8px 12px;border:1px solid #eee;">
             <a href="${s.link}" style="color:#d81b21;">${s.link}</a>
+          </td>
+          <td style="padding:8px 12px;border:1px solid #eee;text-align:center;">
+            <a href="${s.link}"><img src="cid:${s.qrCid}" alt="Mã QR ${s.name}" width="120" height="120" style="display:block;margin:0 auto;" /></a>
+            <div style="font-size:11px;color:#999;margin-top:4px;">Chạm giữ / bấm phải để lưu ảnh</div>
           </td>
         </tr>`,
     )
@@ -66,6 +71,7 @@ function buildEmailHtml(input: {
         <tr>
           <th style="padding:8px 12px;border:1px solid #eee;text-align:left;background:#fafafa;">Cửa hàng</th>
           <th style="padding:8px 12px;border:1px solid #eee;text-align:left;background:#fafafa;">Link vòng quay</th>
+          <th style="padding:8px 12px;border:1px solid #eee;text-align:center;background:#fafafa;">Mã QR</th>
         </tr>
       </thead>
       <tbody>${storeRows}</tbody>
@@ -103,7 +109,7 @@ export async function POST(request: Request) {
   );
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const groups = new Map<string, { code: string; name: string; link: string }[]>();
+  const groups = new Map<string, { code: string; name: string; link: string; qrCid: string }[]>();
   const invalidStores: { code: string; name: string; managerEmail: string }[] = [];
 
   for (const store of eligibleStores) {
@@ -114,7 +120,12 @@ export async function POST(request: Request) {
       continue;
     }
     const list = groups.get(managerEmail) ?? [];
-    list.push({ code: store.code, name: store.name, link: `${origin}/?store=${encodeURIComponent(store.code)}` });
+    list.push({
+      code: store.code,
+      name: store.name,
+      link: `${origin}/?store=${encodeURIComponent(store.code)}`,
+      qrCid: `qr-${store.code}@xingfucha`,
+    });
     groups.set(managerEmail, list);
   }
 
@@ -139,10 +150,19 @@ export async function POST(request: Request) {
     });
     const storeNames = stores.map((s) => s.name).join(", ");
     try {
+      const attachments = await Promise.all(
+        stores.map(async (s) => ({
+          filename: `QR-${s.code}.png`,
+          content: await QRCode.toBuffer(s.link, { width: 240, margin: 1 }),
+          cid: s.qrCid,
+          contentType: "image/png",
+        })),
+      );
       await sendEmail({
         to: managerEmail,
         subject: `[Xing Fu Cha] Thông tin vòng quay may mắn — ${storeNames}`,
         html,
+        attachments,
       });
       sent.push(managerEmail);
     } catch (error) {
