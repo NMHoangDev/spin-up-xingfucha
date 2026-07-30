@@ -793,15 +793,24 @@ export default function ThemeDesignerPage() {
                         </div>
                       </>
                     )}
-                    {selected.kind !== "wheel_disk" && selected.kind !== "pointer" && (
+                    {selected.kind !== "wheel_disk" && (
                       <div className="col-span-2 space-y-1">
-                        <label className="text-xs text-[#a19d9c]">Xoay (độ)</label>
+                        <label className="text-xs text-[#a19d9c]">
+                          Xoay hình ảnh (độ)
+                        </label>
                         <input
                           type="number"
                           value={Math.round(selected.rotation)}
                           onChange={(e) => updateElementLocal(selected.id, { rotation: Number(e.target.value) })}
                           className={DARK_INPUT}
                         />
+                        {selected.kind === "pointer" && (
+                          <p className="text-[10px] leading-4 text-[#5b5856]">
+                            Chỉ xoay hình mũi tên tại chỗ — không đổi vị trí
+                            quanh vòng quay (dùng &quot;Góc quanh vòng
+                            quay&quot; bên dưới cho việc đó).
+                          </p>
+                        )}
                       </div>
                     )}
                     {selected.kind === "pointer" && (

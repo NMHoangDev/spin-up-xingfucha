@@ -315,26 +315,27 @@ export default function ThemeCanvasEditor({
     else setLive(null);
   }
 
-  function renderHandles(element: PageThemeElement, includeRotate: boolean) {
+  function renderHandles(element: PageThemeElement, includeRotate: boolean, includeResize = true) {
     const handleSize = 16 / zoom;
     return (
       <>
-        {RESIZE_HANDLES.map(({ hx, hy, cursor }) => (
-          <div
-            key={`${hx}-${hy}`}
-            onPointerDown={(e) => startResize(e, element, hx, hy)}
-            className="absolute rounded-full border-2 border-white bg-[#d81b21] shadow"
-            style={{
-              width: handleSize,
-              height: handleSize,
-              left: `calc(${hx * 100}% - ${handleSize / 2}px)`,
-              top: `calc(${hy * 100}% - ${handleSize / 2}px)`,
-              cursor,
-              touchAction: "none",
-            }}
-            title="Kéo để đổi kích thước"
-          />
-        ))}
+        {includeResize &&
+          RESIZE_HANDLES.map(({ hx, hy, cursor }) => (
+            <div
+              key={`${hx}-${hy}`}
+              onPointerDown={(e) => startResize(e, element, hx, hy)}
+              className="absolute rounded-full border-2 border-white bg-[#d81b21] shadow"
+              style={{
+                width: handleSize,
+                height: handleSize,
+                left: `calc(${hx * 100}% - ${handleSize / 2}px)`,
+                top: `calc(${hy * 100}% - ${handleSize / 2}px)`,
+                cursor,
+                touchAction: "none",
+              }}
+              title="Kéo để đổi kích thước"
+            />
+          ))}
         {includeRotate && (
           <div
             onPointerDown={(e) => startRotate(e, element)}
@@ -476,12 +477,30 @@ export default function ThemeCanvasEditor({
                 return (
                   <div
                     key={element.id}
+                    ref={(node) => {
+                      nodeRefs.current[element.id] = node;
+                    }}
                     onPointerDown={startPointerAngle}
-                    className="flex cursor-grab items-center justify-center rounded-full border-2 border-[#d81b21] bg-white text-lg shadow"
+                    onPointerEnter={() => setHoveredId(element.id)}
+                    onPointerLeave={() => setHoveredId((id) => (id === element.id ? null : id))}
+                    className="cursor-grab"
                     style={{ ...computePointerBoxStyle(diskElement, element), touchAction: "none" }}
-                    title="Kéo quanh vòng quay để đổi vị trí mũi tên"
+                    title="Kéo quanh vòng quay để đổi vị trí · kéo tay cầm xanh để xoay hình"
                   >
-                    ▼
+                    {element.imagePath ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={element.imagePath}
+                        alt="Mũi tên"
+                        className="pointer-events-none h-full w-full object-contain"
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center rounded-full border-2 border-[#d81b21] bg-white text-lg shadow">
+                        ▼
+                      </div>
+                    )}
+                    {(isSelected || isHovered) && renderHandles(element, true, false)}
                   </div>
                 );
               }

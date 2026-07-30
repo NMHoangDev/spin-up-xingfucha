@@ -24,7 +24,7 @@ const DEFAULT_DISK = { x: 16.3, y: 6.87, width: 67.4, height: 67.4 };
  * without a runtime size measurement. */
 export function computePointerBoxStyle(
   disk: Pick<PageThemeElement, "x" | "y" | "width" | "height"> | undefined,
-  pointer: Pick<PageThemeElement, "angleDeg" | "distancePx" | "width" | "height" | "zIndex">,
+  pointer: Pick<PageThemeElement, "angleDeg" | "distancePx" | "width" | "height" | "zIndex" | "rotation">,
 ): CSSProperties {
   const dx = disk?.x ?? DEFAULT_DISK.x;
   const dy = disk?.y ?? DEFAULT_DISK.y;
@@ -54,6 +54,10 @@ export function computePointerBoxStyle(
     width: `${width}%`,
     height: `${height}%`,
     zIndex: pointer.zIndex,
+    // Rotates the arrow image itself in place (around its own center) —
+    // independent of angleDeg, which instead moves the pointer's position
+    // around the wheel's rim.
+    transform: pointer.rotation ? `rotate(${pointer.rotation}deg)` : undefined,
   };
 }
 
