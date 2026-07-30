@@ -10,10 +10,8 @@ import {
   ChevronRight,
   Gift,
   Lock,
-  Phone,
   Sparkles,
   Target,
-  User,
   X,
 } from "lucide-react";
 
@@ -146,6 +144,19 @@ function readJson<T>(key: string): T | null {
   } catch {
     return null;
   }
+}
+
+/** Customers no longer type a name/phone — this generates a persistent,
+ * phone-shaped identifier once per browser (kept only so the existing
+ * per-customer daily-spin-limit and wallet APIs, which are keyed on
+ * `customer_phone`, keep working without a backend rewrite). It doesn't
+ * identify the real person, so admin features that rely on a real phone
+ * (chỉ định quà, tìm khách trong CRM) no longer apply to these spins. */
+function generateDeviceProfile(): SavedProfile {
+  const carrierDigit = "35789"[Math.floor(Math.random() * 5)];
+  let rest = "";
+  for (let i = 0; i < 8; i++) rest += Math.floor(Math.random() * 10);
+  return { name: "Khách vãng lai", phone: `0${carrierDigit}${rest}` };
 }
 
 function RewardIcon({
@@ -294,9 +305,14 @@ export default function PageContent() {
   );
   const [useRewardLoading, setUseRewardLoading] = useState(false);
   const [localDataReady, setLocalDataReady] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    spinId: string;
+    phone: string;
+  } | null>(null);
+  const [confirmUseLoading, setConfirmUseLoading] = useState(false);
+  const [confirmError, setConfirmError] = useState("");
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
   const buttonSectionRef = useRef<HTMLDivElement | null>(null);
-  const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
 
   const loadWalletItems = async (phone: string) => {
     if (!phone) {
@@ -370,10 +386,11 @@ export default function PageContent() {
       } catch {
         /* fall back to the built-in defaults rendered when theme is null */
       }
-      const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
-      if (savedProfile && !cancelled) {
-        setUserInfo(savedProfile);
-        void loadWalletItems(savedProfile.phone);
+      const profile = readJson<SavedProfile>(PROFILE_KEY) ?? generateDeviceProfile();
+      window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+      if (!cancelled) {
+        setUserInfo(profile);
+        void loadWalletItems(profile.phone);
       }
       const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
       if ((savedTab === "spin" || savedTab === "rewards") && !cancelled) {
@@ -456,9 +473,6 @@ export default function PageContent() {
     phone: userInfo.phone.trim(),
   });
 
-  const isProfileValid = (profile: { name: string; phone: string }) =>
-    Boolean(profile.name && profile.phone && phoneRegex.test(profile.phone));
-
   async function submitSpin(
     name: string,
     phone: string,
@@ -506,6 +520,8 @@ export default function PageContent() {
       setDuration(duration);
       setRotation((prev) => prev + target - (prev % 360));
       setRewardResult(spinReward);
+      setPendingConfirm({ spinId: json.spinId, phone });
+      setConfirmError("");
       setPreSpinOpen(false);
       setInvoiceAmountInput("");
       setIsSpinning(true);
@@ -527,10 +543,6 @@ export default function PageContent() {
       return setFormError("Chương trình quay thưởng đã kết thúc.");
     }
     const profile = readProfileFromState();
-    if (!profile.name || !profile.phone)
-      return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
-    if (!phoneRegex.test(profile.phone))
-      return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
     const minInvoiceAmount = wheelData.minInvoiceAmount;
     let invoiceAmount: number | null = null;
     if (minInvoiceAmount != null) {
@@ -549,12 +561,52 @@ export default function PageContent() {
     if (isSpinning || dailyLimitReached || !storeCode || !wheelData.campaignOpen)
       return;
     const profile = readProfileFromState();
-    if (isProfileValid(profile) && wheelData.minInvoiceAmount == null) {
+    if (wheelData.minInvoiceAmount == null) {
       await submitSpin(profile.name, profile.phone);
       return;
     }
     setFormError("");
     setPreSpinOpen(true);
+  }
+
+  /** The result popup only closes via this — no backdrop/X close — so the
+   * spin is explicitly acknowledged (and, for wallet-mode spins that are
+   * immediately usable, marked redeemed) before dismissing. */
+  async function handleConfirmUsed() {
+    setConfirmError("");
+    const confirm = pendingConfirm;
+    const notYetUsable =
+      rewardResult?.type === "voucher" &&
+      rewardResult.voucherUsableFrom != null &&
+      new Date(rewardResult.voucherUsableFrom).getTime() > Date.now();
+
+    if (!confirm || rewardResult?.type !== "voucher" || notYetUsable) {
+      setPendingConfirm(null);
+      handleCloseResult();
+      return;
+    }
+
+    setConfirmUseLoading(true);
+    try {
+      const res = await fetch("/api/voucher/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spinId: confirm.spinId, phone: confirm.phone }),
+      });
+      const json = await res.json();
+      if (!res.ok && json.error !== "already_used") {
+        setConfirmError(json.message ?? "Không thể xác nhận sử dụng lúc này.");
+        return;
+      }
+      void loadWalletItems(confirm.phone);
+    } catch {
+      setConfirmError("Không thể xác nhận sử dụng lúc này.");
+      return;
+    } finally {
+      setConfirmUseLoading(false);
+    }
+    setPendingConfirm(null);
+    handleCloseResult();
   }
 
   async function handleUseReward(prizeId: string) {
@@ -743,8 +795,11 @@ export default function PageContent() {
                             duration: duration / 1000,
                             ease: [0.12, 0, 0.2, 1],
                           }}
-                          className="rounded-full"
+                          className="rounded-full cursor-pointer"
                           style={themeElementBoxStyle(element)}
+                          onClick={handleSpinStart}
+                          role="button"
+                          aria-label="Quay ngay"
                         >
                           <Image
                             src={wheelData.wheelFace?.imagePath ?? "/images/vongtron.webp"}
@@ -953,53 +1008,13 @@ export default function PageContent() {
 
       <RevealAnimation variant={revealAnimation} playing={showUnboxAnimation} />
 
-      {/* ─── MODAL THÔNG TIN NGƯỜI CHƠI ─── */}
+      {/* ─── MODAL HOÁ ĐƠN (chỉ hiện khi admin bật mức hoá đơn tối thiểu) ─── */}
       <Modal
         open={preSpinOpen}
-        title="Thông tin người chơi"
+        title="Xác nhận hoá đơn"
         onClose={() => !loading && setPreSpinOpen(false)}
       >
         <form onSubmit={handleSpinSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="ml-1 text-sm font-bold text-gray-700">
-              Họ và tên
-            </label>
-            <div className="relative">
-              <User
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                size={18}
-              />
-              <input
-                type="text"
-                placeholder="Nguyễn Văn A"
-                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
-                value={userInfo.name}
-                onChange={(e) =>
-                  setUserInfo((prev) => ({ ...prev, name: e.target.value }))
-                }
-              />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="ml-1 text-sm font-bold text-gray-700">
-              Số điện thoại
-            </label>
-            <div className="relative">
-              <Phone
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                size={18}
-              />
-              <input
-                type="tel"
-                placeholder="0901234567"
-                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
-                value={userInfo.phone}
-                onChange={(e) =>
-                  setUserInfo((prev) => ({ ...prev, phone: e.target.value }))
-                }
-              />
-            </div>
-          </div>
           {wheelData.minInvoiceAmount != null && (
             <div className="space-y-1">
               <label className="ml-1 text-sm font-bold text-gray-700">
@@ -1039,8 +1054,10 @@ export default function PageContent() {
       </Modal>
 
       {/* ─── MODAL KẾT QUẢ VOUCHER ─── */}
-      {/* Chỉ hiện sau khi animation unbox kết thúc (4000ms) */}
-      <Modal open={resultOpen} onClose={handleCloseResult}>
+      {/* Chỉ hiện sau khi animation unbox kết thúc (4000ms). Chỉ đóng được
+          bằng nút "Xác nhận đã dùng" — không có nút X, không tắt khi bấm ra
+          ngoài — để đảm bảo khách/nhân viên đã xác nhận trước khi tắt. */}
+      <Modal open={resultOpen} closeOnBackdrop={false}>
         <motion.div
           className="text-center"
           initial={{ opacity: 0, scale: 0.88 }}
@@ -1123,6 +1140,20 @@ export default function PageContent() {
               </div>
             )}
           </motion.div>
+
+          {confirmError && (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm font-semibold text-red-700">
+              {confirmError}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleConfirmUsed()}
+            disabled={confirmUseLoading}
+            className="mt-6 w-full rounded-2xl bg-[#d81b21] px-4 py-3 text-sm font-bold text-white shadow-lg disabled:opacity-60"
+          >
+            {confirmUseLoading ? "Đang xác nhận..." : "Xác nhận đã dùng"}
+          </button>
         </motion.div>
       </Modal>
 

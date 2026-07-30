@@ -24,7 +24,7 @@ import RevealAnimation, {
   REVEAL_ANIMATION_OPTIONS,
   type RevealAnimationVariant,
 } from "@/components/spin/RevealAnimation";
-import { elementLabel } from "@/lib/theme/geometry";
+import { elementLabel, DEFAULT_DISK } from "@/lib/theme/geometry";
 
 type PageTheme = {
   backgroundColor: string | null;
@@ -338,6 +338,10 @@ export default function ThemeDesignerPage() {
 
   const selected = elements.find((e) => e.id === selectedId) ?? null;
   const layers = [...elements].sort((a, b) => b.zIndex - a.zIndex);
+  const wheelRadius =
+    (elements.find((e) => e.kind === "wheel_disk")?.width ?? DEFAULT_DISK.width) / 2;
+  const pointerEdgeDistancePx = 8;
+  const pointerCenterDistancePx = -wheelRadius;
 
   return (
     <div className="space-y-4">
@@ -828,6 +832,30 @@ export default function ThemeDesignerPage() {
                           <label className="text-xs text-[#a19d9c]">
                             Khoảng cách (% bán kính, âm = lấn vào trong)
                           </label>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => updateElementLocal(selected.id, { distancePx: pointerEdgeDistancePx })}
+                              className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
+                                Math.round(selected.distancePx ?? -15) === pointerEdgeDistancePx
+                                  ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
+                                  : "border-[#353534] bg-[#131313] text-[#c8c5c4] hover:border-[#d81b21]/50"
+                              }`}
+                            >
+                              Mép vòng quay
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateElementLocal(selected.id, { distancePx: pointerCenterDistancePx })}
+                              className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
+                                Math.round(selected.distancePx ?? -15) === Math.round(pointerCenterDistancePx)
+                                  ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
+                                  : "border-[#353534] bg-[#131313] text-[#c8c5c4] hover:border-[#d81b21]/50"
+                              }`}
+                            >
+                              Tâm mặt vòng quay
+                            </button>
+                          </div>
                           <input
                             type="number"
                             value={Math.round(selected.distancePx ?? -15)}
@@ -835,10 +863,10 @@ export default function ThemeDesignerPage() {
                             className={DARK_INPUT}
                           />
                           <p className="text-[10px] leading-4 text-[#5b5856]">
-                            Gợi ý: để mũi tên nằm sát viền vòng quay (không bị
-                            lọt vào giữa hoặc bắn ra phía đối diện), dùng
-                            khoảng <strong>−15 đến +15</strong> — quan sát
-                            canvas bên trái khi gõ số để chỉnh cho đúng mắt.
+                            Chọn nhanh 1 trong 2 nút trên, hoặc gõ số tay: dùng
+                            khoảng <strong>−15 đến +15</strong> để mũi tên nằm
+                            sát viền vòng quay — quan sát canvas bên trái khi
+                            gõ số để chỉnh cho đúng mắt.
                           </p>
                         </div>
                         <div className="col-span-2 space-y-1">

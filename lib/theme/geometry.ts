@@ -15,7 +15,7 @@ export function themeElementBoxStyle(element: PageThemeElement): CSSProperties {
   };
 }
 
-const DEFAULT_DISK = { x: 16.3, y: 6.87, width: 67.4, height: 67.4 };
+export const DEFAULT_DISK = { x: 16.3, y: 6.87, width: 67.4, height: 67.4 };
 
 /** The pointer's position is derived from the wheel disk's box + the
  * pointer's angle/distance (not raw x/y) — see the plan's rotation-safety
