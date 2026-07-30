@@ -34,6 +34,7 @@ function elementToCamel(row: any): PageThemeElement {
     angleDeg: row.angle_deg === null ? null : Number(row.angle_deg),
     distancePx: row.distance_px === null ? null : Number(row.distance_px),
     zIndex: row.z_index,
+    isVisible: row.is_visible,
   };
 }
 
@@ -46,6 +47,7 @@ export async function GET() {
       supabase
         .from("page_theme_elements")
         .select("*")
+        .eq("is_visible", true)
         .order("z_index", { ascending: true }),
     ]);
 

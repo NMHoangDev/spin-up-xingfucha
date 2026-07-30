@@ -21,6 +21,7 @@ function toCamel(row: any): PageThemeElement {
     angleDeg: row.angle_deg === null ? null : Number(row.angle_deg),
     distancePx: row.distance_px === null ? null : Number(row.distance_px),
     zIndex: row.z_index,
+    isVisible: row.is_visible,
   };
 }
 
@@ -80,6 +81,7 @@ export async function POST(request: Request) {
       height: body.height ?? 20,
       rotation: body.rotation ?? 0,
       z_index: (maxZ?.z_index ?? -1) + 1,
+      is_visible: body.isVisible ?? true,
     })
     .select("*")
     .single();

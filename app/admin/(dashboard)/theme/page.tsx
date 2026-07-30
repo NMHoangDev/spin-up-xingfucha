@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   Image as ImageIcon,
   Layers,
@@ -50,6 +53,7 @@ type ThemeElement = {
   angleDeg: number | null;
   distancePx: number | null;
   zIndex: number;
+  isVisible: boolean;
 };
 
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.5];
@@ -144,6 +148,59 @@ export default function ThemeDesignerPage() {
   function updateElementLocal(id: string, patch: Partial<ThemeElement>) {
     setElements((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
     setSaved(false);
+  }
+
+  /** Persists immediately (unlike updateElementLocal, which only stages a
+   * change for the batched "Lưu tất cả") — used for actions that behave
+   * like a toggle/reorder switch rather than a draft edit. */
+  async function patchElementNow(id: string, patch: Partial<ThemeElement>): Promise<ThemeElement> {
+    const res = await fetch(`/api/admin/theme/elements/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error ?? "Cập nhật thất bại.");
+    return json as ThemeElement;
+  }
+
+  async function toggleVisible(element: ThemeElement) {
+    setError(null);
+    try {
+      const updated = await patchElementNow(element.id, { isVisible: !element.isVisible });
+      setElements((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    } catch (e: any) {
+      setError(e?.message ?? "Cập nhật thất bại.");
+    }
+  }
+
+  /** direction -1 = bring forward (toward the front of the stacking order,
+   * i.e. up the Lớp list); +1 = send backward. Swaps zIndex with whichever
+   * neighbor is adjacent in the current front-to-back sort, same pattern as
+   * the up/down reorder arrows on the Quà tặng page. */
+  async function moveLayer(element: ThemeElement, direction: -1 | 1) {
+    const sorted = [...elements].sort((a, b) => b.zIndex - a.zIndex);
+    const idx = sorted.findIndex((e) => e.id === element.id);
+    const swapIdx = idx + direction;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= sorted.length) return;
+    const a = sorted[idx];
+    const b = sorted[swapIdx];
+    setError(null);
+    try {
+      const [updatedA, updatedB] = await Promise.all([
+        patchElementNow(a.id, { zIndex: b.zIndex }),
+        patchElementNow(b.id, { zIndex: a.zIndex }),
+      ]);
+      setElements((prev) =>
+        prev.map((e) => {
+          if (e.id === updatedA.id) return updatedA;
+          if (e.id === updatedB.id) return updatedB;
+          return e;
+        }),
+      );
+    } catch (e: any) {
+      setError(e?.message ?? "Cập nhật thất bại.");
+    }
   }
 
   async function addElement(canvas: "header" | "wheel", kind: "image" | "text") {
@@ -446,19 +503,52 @@ export default function ThemeDesignerPage() {
                     <Layers size={12} /> Lớp ({elements.length})
                   </h4>
                   <div className="space-y-1">
-                    {layers.map((element) => (
-                      <button
+                    {layers.map((element, idx) => (
+                      <div
                         key={element.id}
-                        type="button"
-                        onClick={() => setSelectedId(element.id)}
-                        className={`block w-full truncate rounded-lg px-2 py-2 text-left text-[12px] transition-colors ${
-                          selectedId === element.id
-                            ? "bg-[#d81b21] text-white"
-                            : "text-[#c8c5c4] hover:bg-[#2a2a2a]"
+                        className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${
+                          selectedId === element.id ? "bg-[#d81b21]" : "hover:bg-[#2a2a2a]"
                         }`}
                       >
-                        {elementLabel(element)}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => void toggleVisible(element)}
+                          title={element.isVisible ? "Đang hiện — bấm để ẩn" : "Đang ẩn — bấm để hiện"}
+                          className="shrink-0 p-1.5"
+                        >
+                          <CheckCircle2
+                            size={15}
+                            className={element.isVisible ? "text-green-400" : "text-gray-600"}
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(element.id)}
+                          className={`min-w-0 flex-1 truncate py-2 text-left text-[12px] ${
+                            selectedId === element.id ? "text-white" : "text-[#c8c5c4]"
+                          }`}
+                        >
+                          {elementLabel(element)}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void moveLayer(element, -1)}
+                          disabled={idx === 0}
+                          title="Đưa lên trên (tăng layer)"
+                          className={`shrink-0 rounded p-1 disabled:opacity-20 ${selectedId === element.id ? "text-white" : "text-[#8a8785] hover:text-[#e5e2e1]"}`}
+                        >
+                          <ChevronUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void moveLayer(element, 1)}
+                          disabled={idx === layers.length - 1}
+                          title="Đưa xuống dưới (lùi layer)"
+                          className={`shrink-0 rounded p-1 disabled:opacity-20 ${selectedId === element.id ? "text-white" : "text-[#8a8785] hover:text-[#e5e2e1]"}`}
+                        >
+                          <ChevronDown size={13} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </div>

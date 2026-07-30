@@ -31,11 +31,43 @@ type Props = {
 
 type CanvasKind = "header" | "wheel";
 
+/** Fraction along each axis that a resize handle sits at — 0 = left/top edge
+ * (anchors the opposite edge, growing/shrinking "backwards"), 1 = right/
+ * bottom edge (anchors this same edge, growing "forwards"), 0.5 = centered
+ * on that axis (untouched by drag on that axis, e.g. the top-center handle
+ * only ever changes y/height, never x/width). */
+type HandleFraction = 0 | 0.5 | 1;
+
 type DragState =
   | { type: "move"; canvas: CanvasKind; id: string; startClientX: number; startClientY: number; startX: number; startY: number; rectWidth: number; rectHeight: number }
-  | { type: "resize"; canvas: CanvasKind; id: string; startClientX: number; startClientY: number; startWidth: number; startHeight: number; rectWidth: number; rectHeight: number }
+  | {
+      type: "resize";
+      canvas: CanvasKind;
+      id: string;
+      startClientX: number;
+      startClientY: number;
+      startX: number;
+      startY: number;
+      startWidth: number;
+      startHeight: number;
+      rectWidth: number;
+      rectHeight: number;
+      hx: HandleFraction;
+      hy: HandleFraction;
+    }
   | { type: "rotate"; canvas: CanvasKind; id: string; centerX: number; centerY: number; startAngle: number; startRotation: number }
   | { type: "pointer-angle"; id: string; rectLeft: number; rectTop: number; rectWidth: number; rectHeight: number };
+
+const RESIZE_HANDLES: { hx: HandleFraction; hy: HandleFraction; cursor: string }[] = [
+  { hx: 0, hy: 0, cursor: "nwse-resize" },
+  { hx: 0.5, hy: 0, cursor: "ns-resize" },
+  { hx: 1, hy: 0, cursor: "nesw-resize" },
+  { hx: 0, hy: 0.5, cursor: "ew-resize" },
+  { hx: 1, hy: 0.5, cursor: "ew-resize" },
+  { hx: 0, hy: 1, cursor: "nesw-resize" },
+  { hx: 0.5, hy: 1, cursor: "ns-resize" },
+  { hx: 1, hy: 1, cursor: "nwse-resize" },
+];
 
 // Mirrors app/PageContent.tsx's real layout exactly (the two containers that
 // hold the title/decorations and the wheel visual, plus the section's own
@@ -148,7 +180,12 @@ export default function ThemeCanvasEditor({
     };
   }
 
-  function startResize(event: React.PointerEvent, element: PageThemeElement) {
+  function startResize(
+    event: React.PointerEvent,
+    element: PageThemeElement,
+    hx: HandleFraction,
+    hy: HandleFraction,
+  ) {
     event.stopPropagation();
     onSelect(element.id);
     (event.currentTarget as Element).setPointerCapture(event.pointerId);
@@ -159,10 +196,14 @@ export default function ThemeCanvasEditor({
       id: element.id,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      startX: element.x,
+      startY: element.y,
       startWidth: element.width ?? 20,
       startHeight: element.height ?? 20,
       rectWidth: rect?.width || 1,
       rectHeight: rect?.height || 1,
+      hx,
+      hy,
     };
   }
 
@@ -235,10 +276,22 @@ export default function ThemeCanvasEditor({
     } else if (state.type === "resize") {
       const dxPct = ((event.clientX - state.startClientX) / state.rectWidth) * 100;
       const dyPct = ((event.clientY - state.startClientY) / state.rectHeight) * 100;
-      scheduleLive(state.id, {
-        width: Math.max(4, state.startWidth + dxPct),
-        height: Math.max(4, state.startHeight + dyPct),
-      });
+      const patch: Partial<PageThemeElement> = {};
+      if (state.hx === 0) {
+        const newWidth = Math.max(4, state.startWidth - dxPct);
+        patch.width = newWidth;
+        patch.x = state.startX + (state.startWidth - newWidth);
+      } else if (state.hx === 1) {
+        patch.width = Math.max(4, state.startWidth + dxPct);
+      }
+      if (state.hy === 0) {
+        const newHeight = Math.max(4, state.startHeight - dyPct);
+        patch.height = newHeight;
+        patch.y = state.startY + (state.startHeight - newHeight);
+      } else if (state.hy === 1) {
+        patch.height = Math.max(4, state.startHeight + dyPct);
+      }
+      scheduleLive(state.id, patch);
     } else if (state.type === "rotate") {
       const angle =
         (Math.atan2(event.clientX - state.centerX, -(event.clientY - state.centerY)) * 180) /
@@ -263,15 +316,25 @@ export default function ThemeCanvasEditor({
   }
 
   function renderHandles(element: PageThemeElement, includeRotate: boolean) {
-    const handleSize = 22 / zoom;
+    const handleSize = 16 / zoom;
     return (
       <>
-        <div
-          onPointerDown={(e) => startResize(e, element)}
-          className="absolute cursor-nwse-resize rounded-full border-2 border-white bg-[#d81b21] shadow"
-          style={{ width: handleSize, height: handleSize, bottom: -handleSize / 2, right: -handleSize / 2, touchAction: "none" }}
-          title="Kéo để phóng to/thu nhỏ"
-        />
+        {RESIZE_HANDLES.map(({ hx, hy, cursor }) => (
+          <div
+            key={`${hx}-${hy}`}
+            onPointerDown={(e) => startResize(e, element, hx, hy)}
+            className="absolute rounded-full border-2 border-white bg-[#d81b21] shadow"
+            style={{
+              width: handleSize,
+              height: handleSize,
+              left: `calc(${hx * 100}% - ${handleSize / 2}px)`,
+              top: `calc(${hy * 100}% - ${handleSize / 2}px)`,
+              cursor,
+              touchAction: "none",
+            }}
+            title="Kéo để đổi kích thước"
+          />
+        ))}
         {includeRotate && (
           <div
             onPointerDown={(e) => startRotate(e, element)}
@@ -285,6 +348,7 @@ export default function ThemeCanvasEditor({
   }
 
   function renderDecor(element: PageThemeElement) {
+    if (!element.isVisible) return null;
     const isSelected = selectedId === element.id;
     const isHovered = hoveredId === element.id;
     return (
@@ -376,6 +440,7 @@ export default function ThemeCanvasEditor({
             onPointerCancel={handleUp}
           >
             {orderForPaint(wheelElements).map((element) => {
+              if (!element.isVisible) return null;
               const isSelected = selectedId === element.id;
               const isHovered = hoveredId === element.id;
 

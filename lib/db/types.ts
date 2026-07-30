@@ -100,6 +100,7 @@ export type PageThemeElement = {
   angleDeg: number | null;
   distancePx: number | null;
   zIndex: number;
+  isVisible: boolean;
 };
 
 export type AssignedGiftStatus = "pending" | "fulfilled" | "cancelled";

@@ -21,6 +21,7 @@ function toCamel(row: any): PageThemeElement {
     angleDeg: row.angle_deg === null ? null : Number(row.angle_deg),
     distancePx: row.distance_px === null ? null : Number(row.distance_px),
     zIndex: row.z_index,
+    isVisible: row.is_visible,
   };
 }
 
@@ -49,6 +50,7 @@ export async function PATCH(
   if ("angleDeg" in body) update.angle_deg = body.angleDeg;
   if ("distancePx" in body) update.distance_px = body.distancePx;
   if ("zIndex" in body) update.z_index = body.zIndex;
+  if ("isVisible" in body) update.is_visible = body.isVisible;
 
   const supabase = createSupabaseServiceClient();
   const { data, error } = await supabase
