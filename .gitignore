@@ -3,6 +3,7 @@ node_modules/
 coverage/
 .DS_Store
 *.log
+*.tsbuildinfo
 .env*
 hp-task-firebase-adminsdk-fbsvc-ee802f04c3.json
 
@@ -19,3 +20,6 @@ storage/permission/xinfucha__ggsheet.json
 # Playwright / tool auth session dump (nếu có)
 **/storageState.json
 .auth/
+
+# Supabase credentials notes (riêng tư, không lên git)
+SUPABASE_PRIVATE_NOTES.md

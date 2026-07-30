@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import confetti from "canvas-confetti";
 import {
@@ -18,46 +19,49 @@ import {
 
 import OpenInSafariBanner from "@/components/OpenInSafariBanner";
 import logoWebp from "@/assets/logo.webp";
-import { REWARDS, type Reward } from "@/lib/rewards/rewards";
-import { selectWeightedReward } from "@/lib/rewards/reward.service";
-import { runWithCrossTabStorageLock } from "@/lib/spins/cross-tab-lock";
-import { initializeAutoReset } from "@/lib/auto-reset-vouchers";
+import RevealAnimation, {
+  REVEAL_ANIMATION_RESULT_DELAY_MS,
+} from "@/components/spin/RevealAnimation";
+import type {
+  PageTheme,
+  PageThemeElement,
+  RevealAnimation as RevealAnimationType,
+} from "@/lib/db/types";
+import { themeElementBoxStyle, computePointerBoxStyle } from "@/lib/theme/geometry";
 
 type UserInfo = { name: string; phone: string };
 type ActiveTab = "spin" | "rewards";
-type SpinReward = Reward & {
+type SpinReward = {
+  id: string;
+  label: string;
+  code?: string | null;
+  type: "voucher" | "item";
   voucherDelayMinutes?: number;
   voucherUsableFrom?: string | null;
   voucherExpiresAt?: string | null;
 };
 type WalletItem = SpinReward & {
   quantity: number;
-  firstWonAt: string;
-  lastWonAt: string;
-  lastUsedAt?: string | null;
-  voucherCodes?: string[];
-  locationId?: string;
+  redeemableSpinId: string;
 };
-type WalletStore = { items: WalletItem[]; updatedAt: string };
 type SavedProfile = { name: string; phone: string };
-type DailyQuotaStore = {
-  day: string;
-  spinsUsedToday: number;
-  maxSpinsToday: number;
-  profileKey?: string;
+type WheelSlice = {
+  slotIndex: number;
+  startAngle: number;
+  endAngle: number;
+  prizeId: string | null;
+};
+type WheelData = {
+  ready: boolean;
+  campaignOpen: boolean;
+  walletEnabled: boolean;
+  minInvoiceAmount?: number | null;
+  wheelFace?: { imagePath: string; sliceCount: number };
+  slices?: WheelSlice[];
 };
 
-const WALLET_KEY = "xfc-wallet-v2";
-/** 3 lượt quay / ngày (theo ngày lịch trình duyệt), chỉ lưu localStorage */
-const MAX_SPINS_PER_DAY = 3;
-const DAILY_QUOTA_KEY = "xfc-daily-quota-v3";
 const ACTIVE_TAB_KEY = "xfc-active-tab-v1";
 const PROFILE_KEY = "xfc-profile-v1";
-const DAILY_USAGE_KEY = "xfc-daily-usage-v2";
-const CHANNEL_KEY = "xfc-spin-sync-v2";
-const WALLET_COOKIE = "xfc_wallet_summary";
-/** Không còn phân chi nhánh — giá trị cố định lưu kèm voucher trong ví (local). */
-const DEFAULT_PLAY_LOCATION = "chung";
 
 const rewardVisuals: Record<
   number,
@@ -84,26 +88,7 @@ const rewardVisuals: Record<
   },
 };
 
-/** Ngày theo múi giờ máy khách (YYYY-MM-DD) — reset lượt quay & dùng voucher theo ngày lịch */
-function todayKey() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
-function stripVietnameseTones(input: string): string {
-  const normalized = input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  return normalized.replace(/đ/g, "d").replace(/Đ/g, "d").toLowerCase();
-}
-
-/** `tenkhongdaukhoangtrang_sodienthoai` — ví dụ nguyenminhhoang_0987264135 */
-function createProfileKey(name: string, phone: string) {
-  const digits = phone.replace(/\D/g, "");
-  const namePart = stripVietnameseTones(name.trim()).replace(/\s+/g, "");
-  return `${namePart}_${digits}`;
-}
 
 function formatTime(value?: string | null) {
   if (!value) return null;
@@ -125,10 +110,6 @@ function isVoucherExpired(expiresAt?: string | null) {
 function isVoucherNotUsableYet(usableFrom?: string | null) {
   if (!usableFrom) return false;
   return Date.now() < new Date(usableFrom).getTime();
-}
-
-function isSpinPeriodOver() {
-  return Date.now() > new Date(2026, 4, 31, 23, 59, 59, 999).getTime();
 }
 
 function getRewardConditionNote(reward?: { id: number } | null) {
@@ -165,20 +146,6 @@ function readJson<T>(key: string): T | null {
   } catch {
     return null;
   }
-}
-
-function generateLocalVoucherCode(productCode: string) {
-  const base = productCode.replace(/\s+/g, "-").toUpperCase();
-  const suffix =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()
-      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
-  return `XFC-${base}-${suffix}`;
-}
-
-function readUsedRewardCount() {
-  const stored = readJson<{ day: string; count: number }>(DAILY_USAGE_KEY);
-  return stored?.day === todayKey() ? Number(stored.count ?? 0) : 0;
 }
 
 function RewardIcon({
@@ -263,16 +230,54 @@ function Modal({
   );
 }
 
+/** Renders one admin-placed decorative `image`/`text` element (never
+ * `wheel_disk`/`pointer`, those are rendered specially so they can stay in
+ * sync with the live spin animation/rotation math). */
+function ThemeDecorElement({ element }: { element: PageThemeElement }) {
+  if (element.kind === "text") {
+    return (
+      <div
+        className="pointer-events-none flex items-center justify-center text-center font-black"
+        style={{
+          ...themeElementBoxStyle(element),
+          color: element.textColor ?? "#8f111a",
+          fontSize: element.fontSize ? `${element.fontSize}px` : undefined,
+        }}
+      >
+        {element.textContent}
+      </div>
+    );
+  }
+  return (
+    <div className="pointer-events-none" style={themeElementBoxStyle(element)}>
+      <Image
+        src={element.imagePath ?? ""}
+        alt=""
+        fill
+        sizes="200px"
+        unoptimized={element.imagePath?.startsWith("http")}
+        className="object-contain"
+      />
+    </div>
+  );
+}
+
 export default function PageContent() {
+  const searchParams = useSearchParams();
+  const storeCode = (searchParams.get("store") ?? "").trim();
   const [activeTab, setActiveTab] = useState<ActiveTab>("spin");
   const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "" });
-  const [wallet, setWallet] = useState<WalletStore>({
-    items: [],
-    updatedAt: "",
+  const [invoiceAmountInput, setInvoiceAmountInput] = useState("");
+  const [walletItems, setWalletItems] = useState<WalletItem[]>([]);
+  const [wheelData, setWheelData] = useState<WheelData>({
+    ready: false,
+    campaignOpen: false,
+    walletEnabled: false,
   });
-  const [quota, setQuota] = useState<DailyQuotaStore | null>(null);
-  const [showQuota, setShowQuota] = useState(false);
-  const [usedRewardCount, setUsedRewardCount] = useState(0);
+  const [theme, setTheme] = useState<PageTheme | null>(null);
+  const [themeElements, setThemeElements] = useState<PageThemeElement[]>([]);
+  const [dailyLimitReached, setDailyLimitReached] = useState(false);
+  const [dailyUsageLimitReached, setDailyUsageLimitReached] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
@@ -289,114 +294,100 @@ export default function PageContent() {
   );
   const [useRewardLoading, setUseRewardLoading] = useState(false);
   const [localDataReady, setLocalDataReady] = useState(false);
-  const channelRef = useRef<BroadcastChannel | null>(null);
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
   const buttonSectionRef = useRef<HTMLDivElement | null>(null);
   const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
 
+  const loadWalletItems = async (phone: string) => {
+    if (!phone) {
+      setWalletItems([]);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/wallet?phone=${encodeURIComponent(phone)}`,
+      );
+      const json = await res.json();
+      const items: WalletItem[] = (json.items ?? []).map((it: any) => ({
+        id: it.prizeId,
+        label: it.label,
+        code: it.code,
+        type: "voucher" as const,
+        quantity: it.quantity,
+        redeemableSpinId: it.redeemableSpinId,
+        voucherUsableFrom: it.nextUsableFrom,
+        voucherExpiresAt: it.nextExpiresAt,
+      }));
+      setWalletItems(items);
+    } catch {
+      /* best-effort refresh; keep previously loaded items on failure */
+    }
+  };
+
+  const pointerElement = useMemo(
+    () => themeElements.find((e) => e.kind === "pointer"),
+    [themeElements],
+  );
+  const wheelDiskElement = useMemo(
+    () => themeElements.find((e) => e.kind === "wheel_disk"),
+    [themeElements],
+  );
+  const headerDecorElements = useMemo(
+    () =>
+      themeElements.filter(
+        (e) => e.canvas === "header" && (e.kind === "image" || e.kind === "text"),
+      ),
+    [themeElements],
+  );
+  const wheelDecorElements = useMemo(
+    () =>
+      themeElements.filter(
+        (e) => e.canvas === "wheel" && (e.kind === "image" || e.kind === "text"),
+      ),
+    [themeElements],
+  );
+  const pointerAngleDeg = pointerElement?.angleDeg ?? 0;
+  const revealAnimation: RevealAnimationType = theme?.revealAnimation ?? "box_open";
+
   useEffect(() => {
-    initializeAutoReset();
-    setWallet(
-      readJson<WalletStore>(WALLET_KEY) ?? { items: [], updatedAt: "" },
-    );
-    const t = todayKey();
-    const raw = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
-    let nextQuota: DailyQuotaStore;
-    if (!raw || raw.day !== t) {
-      nextQuota = {
-        day: t,
-        spinsUsedToday: 0,
-        maxSpinsToday: MAX_SPINS_PER_DAY,
-      };
-      window.localStorage.setItem(
-        DAILY_QUOTA_KEY,
-        JSON.stringify(nextQuota),
-      );
-    } else {
-      nextQuota = {
-        day: raw.day,
-        spinsUsedToday: Math.min(
-          Math.max(0, Number(raw.spinsUsedToday ?? 0)),
-          MAX_SPINS_PER_DAY,
-        ),
-        maxSpinsToday: MAX_SPINS_PER_DAY,
-        ...(raw.profileKey ? { profileKey: raw.profileKey } : {}),
-      };
-      window.localStorage.setItem(
-        DAILY_QUOTA_KEY,
-        JSON.stringify(nextQuota),
-      );
-    }
-    setQuota(nextQuota);
-    setUsedRewardCount(readUsedRewardCount());
-    const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
-    if (savedProfile) setUserInfo(savedProfile);
-    const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
-    if (savedTab === "spin" || savedTab === "rewards") setActiveTab(savedTab);
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel(CHANNEL_KEY);
-      channelRef.current = channel;
-      channel.onmessage = (event) => {
-        if (event.data?.type === "wallet")
-          setWallet(event.data.payload as WalletStore);
-        if (event.data?.type === "quota")
-          setQuota(event.data.payload as DailyQuotaStore | null);
-        if (event.data?.type === "used-count")
-          setUsedRewardCount(Number(event.data.payload ?? 0));
-      };
-    }
-    setLocalDataReady(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/wheel/active");
+        const json = (await res.json()) as WheelData;
+        if (!cancelled) setWheelData(json);
+      } catch {
+        if (!cancelled)
+          setWheelData({ ready: false, campaignOpen: false, walletEnabled: false });
+      }
+      try {
+        const res = await fetch("/api/theme/active");
+        const json = await res.json();
+        if (!cancelled) {
+          setTheme(json.theme ?? null);
+          setThemeElements(json.elements ?? []);
+        }
+      } catch {
+        /* fall back to the built-in defaults rendered when theme is null */
+      }
+      const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
+      if (savedProfile && !cancelled) {
+        setUserInfo(savedProfile);
+        void loadWalletItems(savedProfile.phone);
+      }
+      const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
+      if ((savedTab === "spin" || savedTab === "rewards") && !cancelled) {
+        setActiveTab(savedTab);
+      }
+      if (!cancelled) setLocalDataReady(true);
+    })();
     return () => {
-      channelRef.current?.close();
-      channelRef.current = null;
+      cancelled = true;
     };
   }, []);
 
   /** Tab khác ghi localStorage → đồng bộ state (bổ sung cho BroadcastChannel). */
-  useEffect(() => {
-    function onStorage(e: StorageEvent) {
-      if (e.storageArea !== window.localStorage) return;
-      if (e.key === WALLET_KEY && e.newValue) {
-        try {
-          setWallet(JSON.parse(e.newValue) as WalletStore);
-        } catch {
-          /* empty */
-        }
-      }
-      if (e.key === DAILY_QUOTA_KEY) {
-        if (!e.newValue) setQuota(null);
-        else {
-          try {
-            setQuota(JSON.parse(e.newValue) as DailyQuotaStore);
-          } catch {
-            /* empty */
-          }
-        }
-      }
-      if (e.key === DAILY_USAGE_KEY && e.newValue) {
-        try {
-          const o = JSON.parse(e.newValue) as { day: string; count: number };
-          if (o.day === todayKey())
-            setUsedRewardCount(Math.max(0, Number(o.count ?? 0)));
-        } catch {
-          /* empty */
-        }
-      }
-    }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-  // Thêm useEffect này sau các useEffect khác
-  useEffect(() => {
-    const promise = new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          resolve();
-        });
-      });
-    });
-    promise.then(() => setShowQuota(true));
-  }, []);
+
   useEffect(() => {
     window.sessionStorage.setItem(ACTIVE_TAB_KEY, activeTab);
   }, [activeTab]);
@@ -440,100 +431,25 @@ export default function PageContent() {
     return () => window.clearTimeout(timer);
   }, [duration, isSpinning]);
 
-  // Animation unbox: 1s shake + 4s opening = 5s, rồi mở popup voucher ngay lập tức
+  // Mỗi hiệu ứng mở quà có nhịp riêng — độ trễ trước khi mở popup kết quả
+  // tương ứng theo REVEAL_ANIMATION_RESULT_DELAY_MS.
   useEffect(() => {
     if (!showUnboxAnimation) return;
     const timer = window.setTimeout(() => {
       setResultOpen(true);
-    }, 1500); // Popup mở ngay khi hộp quà mở xong
+    }, REVEAL_ANIMATION_RESULT_DELAY_MS[revealAnimation]);
     return () => window.clearTimeout(timer);
-  }, [showUnboxAnimation]);
+  }, [showUnboxAnimation, revealAnimation]);
 
   const groupedWallet = useMemo(
-    () =>
-      [...wallet.items].sort((a, b) =>
-        b.quantity !== a.quantity
-          ? b.quantity - a.quantity
-          : new Date(b.lastWonAt).getTime() - new Date(a.lastWonAt).getTime(),
-      ),
-    [wallet.items],
+    () => [...walletItems].sort((a, b) => b.quantity - a.quantity),
+    [walletItems],
   );
-
-  /** Giới hạn lượt quay theo localStorage + ngày lịch */
-  const hasReachedSpinLimit =
-    quota?.day === todayKey() &&
-    quota.spinsUsedToday >= quota.maxSpinsToday;
-  const localSpinBlocked = hasReachedSpinLimit;
-
-  const persistWallet = (nextWallet: WalletStore) => {
-    setWallet(nextWallet);
-    window.localStorage.setItem(WALLET_KEY, JSON.stringify(nextWallet));
-    document.cookie = `${WALLET_COOKIE}=${encodeURIComponent(nextWallet.items.map((item) => `${item.id}:${item.quantity}`).join(","))}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-    channelRef.current?.postMessage({ type: "wallet", payload: nextWallet });
-  };
-
-  const persistQuota = (nextQuota: DailyQuotaStore | null) => {
-    setQuota(nextQuota);
-    if (nextQuota)
-      window.localStorage.setItem(DAILY_QUOTA_KEY, JSON.stringify(nextQuota));
-    else window.localStorage.removeItem(DAILY_QUOTA_KEY);
-    channelRef.current?.postMessage({ type: "quota", payload: nextQuota });
-  };
 
   const persistProfile = (profile: SavedProfile) => {
     window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
   };
 
-  const persistUsedRewardCount = (count: number) => {
-    setUsedRewardCount(count);
-    window.localStorage.setItem(
-      DAILY_USAGE_KEY,
-      JSON.stringify({ day: todayKey(), count }),
-    );
-    channelRef.current?.postMessage({ type: "used-count", payload: count });
-  };
-
-  const addRewardToWallet = (
-    reward: SpinReward,
-    receivedAt: string,
-    spinMeta?: { voucherCode?: string; locationId?: string },
-  ) => {
-    const current = readJson<WalletStore>(WALLET_KEY) ?? {
-      items: [],
-      updatedAt: "",
-    };
-    const existing = current.items.find((item) => item.id === reward.id);
-    const items = existing
-      ? current.items.map((item) =>
-          item.id === reward.id
-            ? {
-                ...item,
-                quantity: item.quantity + 1,
-                lastWonAt: receivedAt,
-                voucherUsableFrom:
-                  reward.voucherUsableFrom ?? item.voucherUsableFrom ?? null,
-                voucherExpiresAt:
-                  reward.voucherExpiresAt ?? item.voucherExpiresAt ?? null,
-                voucherCodes: spinMeta?.voucherCode
-                  ? [...(item.voucherCodes ?? []), spinMeta.voucherCode]
-                  : item.voucherCodes,
-                locationId: spinMeta?.locationId ?? item.locationId,
-              }
-            : item,
-        )
-      : [
-          ...current.items,
-          {
-            ...reward,
-            quantity: 1,
-            firstWonAt: receivedAt,
-            lastWonAt: receivedAt,
-            voucherCodes: spinMeta?.voucherCode ? [spinMeta.voucherCode] : [],
-            locationId: spinMeta?.locationId,
-          },
-        ];
-    persistWallet({ items, updatedAt: receivedAt });
-  };
 
   const readProfileFromState = () => ({
     name: userInfo.name.trim(),
@@ -543,91 +459,57 @@ export default function PageContent() {
   const isProfileValid = (profile: { name: string; phone: string }) =>
     Boolean(profile.name && profile.phone && phoneRegex.test(profile.phone));
 
-  async function submitSpin(name: string, phone: string) {
+  async function submitSpin(
+    name: string,
+    phone: string,
+    invoiceAmount?: number | null,
+  ) {
     setFormError("");
     setLoading(true);
     try {
-      type SpinOk = {
-        duration: number;
-        target: number;
-        spinReward: SpinReward;
-      };
-      const outcome = await runWithCrossTabStorageLock((): SpinOk | "limit" | "ended" => {
-        if (isSpinPeriodOver()) {
-          return "ended";
-        }
-        const t = todayKey();
-        const rawQ = readJson<DailyQuotaStore>(DAILY_QUOTA_KEY);
-        const q: DailyQuotaStore =
-          rawQ && rawQ.day === t
-            ? {
-                day: t,
-                spinsUsedToday: Math.min(
-                  Math.max(0, Number(rawQ.spinsUsedToday ?? 0)),
-                  MAX_SPINS_PER_DAY,
-                ),
-                maxSpinsToday: MAX_SPINS_PER_DAY,
-                ...(rawQ.profileKey ? { profileKey: rawQ.profileKey } : {}),
-              }
-            : {
-                day: t,
-                spinsUsedToday: 0,
-                maxSpinsToday: MAX_SPINS_PER_DAY,
-              };
-        if (q.spinsUsedToday >= q.maxSpinsToday) {
-          persistQuota(q);
-          return "limit";
-        }
-        const { reward, index } = selectWeightedReward();
-        const now = new Date();
-        const year = now.getFullYear();
-        const usableFromIso = new Date(year, 4, 30, 0, 0, 0).toISOString(); // May 30th
-        const expiresIso = new Date(year, 5, 15, 23, 59, 59, 999).toISOString(); // June 15th
-        const voucherCode = generateLocalVoucherCode(
-          reward.code ?? String(reward.id),
-        );
-        const spinReward: SpinReward = {
-          ...reward,
-          voucherDelayMinutes: 0,
-          voucherUsableFrom: usableFromIso,
-          voucherExpiresAt: expiresIso,
-        };
-        const angle = 360 / REWARDS.length;
-        const extraSpins = 6 + Math.floor(Math.random() * 3);
-        const offset = (Math.random() - 0.5) * (angle * 0.42);
-        const target =
-          extraSpins * 360 + (360 - (index * angle + angle / 2)) + offset;
-        const receivedAt = now.toISOString();
-        const duration = 3000 + Math.floor(Math.random() * 800);
-        persistProfile({ name, phone });
-        addRewardToWallet(spinReward, receivedAt, {
-          voucherCode,
-          locationId: DEFAULT_PLAY_LOCATION,
-        });
-        persistQuota({
-          day: t,
-          spinsUsedToday: q.spinsUsedToday + 1,
-          maxSpinsToday: MAX_SPINS_PER_DAY,
-          profileKey: createProfileKey(name, phone),
-        });
-        return { duration, target, spinReward };
+      const res = await fetch("/api/spin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeCode, name, phone, invoiceAmount }),
       });
+      const json = await res.json();
 
-      if (outcome === "ended") {
-        setFormError("Chương trình quay thưởng đã kết thúc.");
+      if (!res.ok) {
+        if (json.error === "daily_limit_reached") setDailyLimitReached(true);
+        setFormError(json.message ?? "Có lỗi xảy ra khi quay vòng quay.");
         return;
       }
-      if (outcome === "limit") {
-        setFormError(
-          `Đã dùng hết ${MAX_SPINS_PER_DAY} lượt quay hôm nay cho thiết bị này.`,
-        );
-        return;
-      }
-      setDuration(outcome.duration);
-      setRotation((prev) => prev + outcome.target - (prev % 360));
-      setRewardResult(outcome.spinReward);
+
+      const sliceStart = json.slice.startAngle as number;
+      const sliceEnd = json.slice.endAngle as number;
+      const sliceCenter = (sliceStart + sliceEnd) / 2;
+      const sliceWidth = sliceEnd - sliceStart;
+      const extraSpins = 6 + Math.floor(Math.random() * 3);
+      const offset = (Math.random() - 0.5) * (sliceWidth * 0.42);
+      const target =
+        extraSpins * 360 +
+        ((pointerAngleDeg - sliceCenter + 360) % 360) +
+        offset;
+      const duration = 3000 + Math.floor(Math.random() * 800);
+
+      const spinReward: SpinReward = {
+        id: json.prize.id,
+        label: json.prize.label,
+        code: json.prize.code,
+        type: json.wallet?.enabled ? "voucher" : "item",
+        voucherDelayMinutes: 0,
+        voucherUsableFrom: json.wallet?.usableFrom ?? null,
+        voucherExpiresAt: json.wallet?.expiresAt ?? null,
+      };
+
+      persistProfile({ name, phone });
+      setDuration(duration);
+      setRotation((prev) => prev + target - (prev % 360));
+      setRewardResult(spinReward);
       setPreSpinOpen(false);
+      setInvoiceAmountInput("");
       setIsSpinning(true);
+      void loadWalletItems(phone);
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -641,7 +523,7 @@ export default function PageContent() {
 
   async function handleSpinSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (isSpinPeriodOver()) {
+    if (!wheelData.campaignOpen) {
       return setFormError("Chương trình quay thưởng đã kết thúc.");
     }
     const profile = readProfileFromState();
@@ -649,78 +531,60 @@ export default function PageContent() {
       return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
     if (!phoneRegex.test(profile.phone))
       return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
-    await submitSpin(profile.name, profile.phone);
+    const minInvoiceAmount = wheelData.minInvoiceAmount;
+    let invoiceAmount: number | null = null;
+    if (minInvoiceAmount != null) {
+      invoiceAmount = Number(invoiceAmountInput.replace(/[^\d]/g, ""));
+      if (!invoiceAmountInput || !Number.isFinite(invoiceAmount) || invoiceAmount <= 0)
+        return setFormError("Vui lòng nhập số tiền hoá đơn.");
+      if (invoiceAmount < minInvoiceAmount)
+        return setFormError(
+          `Hoá đơn phải từ ${minInvoiceAmount.toLocaleString("vi-VN")}đ trở lên mới được quay.`,
+        );
+    }
+    await submitSpin(profile.name, profile.phone, invoiceAmount);
   }
 
   async function handleSpinStart() {
-    if (isSpinning || localSpinBlocked || isSpinPeriodOver()) return;
+    if (isSpinning || dailyLimitReached || !storeCode || !wheelData.campaignOpen)
+      return;
     const profile = readProfileFromState();
-    if (isProfileValid(profile)) {
+    if (isProfileValid(profile) && wheelData.minInvoiceAmount == null) {
       await submitSpin(profile.name, profile.phone);
       return;
     }
     setPreSpinOpen(true);
   }
 
-  async function handleUseReward(rewardId: number) {
+  async function handleUseReward(prizeId: string) {
     const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
     if (!savedProfile?.phone)
       return setFormError(
         "Chưa tìm thấy thông tin người chơi để sử dụng voucher.",
       );
+    const target = walletItems.find((item) => item.id === prizeId);
+    if (!target) return;
     setUseRewardLoading(true);
     try {
-      const consumedMeta = await runWithCrossTabStorageLock(() => {
-        const usedToday = readUsedRewardCount();
-        if (usedToday >= 3) {
-          throw new Error(
-            "Bạn đã dùng đủ 3 voucher trong hôm nay, chưa thể dùng thêm.",
-          );
-        }
-        const current = readJson<WalletStore>(WALLET_KEY) ?? {
-          items: [],
-          updatedAt: "",
-        };
-        const consumedReward = current.items.find(
-          (item) => item.id === rewardId,
-        );
-        if (consumedReward) {
-          if (isVoucherNotUsableYet(consumedReward.voucherUsableFrom)) {
-            throw new Error("Voucher này chưa tới hạn sử dụng.");
-          }
-          if (isVoucherExpired(consumedReward.voucherExpiresAt)) {
-            throw new Error("Voucher này đã hết hạn sử dụng.");
-          }
-        }
-        const voucherCode = consumedReward?.voucherCodes?.[0];
-        if (!voucherCode) {
-          throw new Error("Không tìm thấy mã voucher để sử dụng.");
-        }
-
-        const usedAt = new Date().toISOString();
-        const nextItems = current.items
-          .map((item) =>
-            item.id === rewardId
-              ? {
-                  ...item,
-                  quantity: item.quantity - 1,
-                  lastUsedAt: usedAt,
-                  voucherCodes: (item.voucherCodes ?? []).slice(1),
-                }
-              : item,
-          )
-          .filter((item) => item.quantity > 0);
-        persistWallet({
-          items: nextItems,
-          updatedAt: new Date().toISOString(),
-        });
-        persistUsedRewardCount(usedToday + 1);
-        return { consumedReward: consumedReward ?? null };
+      const res = await fetch("/api/voucher/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spinId: target.redeemableSpinId,
+          phone: savedProfile.phone,
+        }),
       });
+      const json = await res.json();
+      if (!res.ok) {
+        if (json.error === "daily_usage_limit_reached")
+          setDailyUsageLimitReached(true);
+        throw new Error(json.message ?? "Không thể sử dụng voucher lúc này.");
+      }
 
       setFormError("");
-      setUsedVoucherInfo(consumedMeta.consumedReward);
+      setUsedVoucherInfo(target);
       setUsedVoucherOpen(true);
+      void loadWalletItems(savedProfile.phone);
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -735,7 +599,7 @@ export default function PageContent() {
   function handleCloseResult() {
     setResultOpen(false);
     setShowUnboxAnimation(false);
-    setActiveTab("rewards");
+    if (wheelData.walletEnabled) setActiveTab("rewards");
   }
 
   if (!localDataReady) {
@@ -757,13 +621,19 @@ export default function PageContent() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f7ead1] text-[#571017]">
-      <div className="absolute inset-0">
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundColor: theme?.backgroundColor ?? "#f7ead1",
+        }}
+      >
         <Image
-          src="/images/background.webp"
+          src={theme?.backgroundImagePath ?? "/images/background.webp"}
           alt="Background XingFuCha"
           fill
           priority
           sizes="100vw"
+          unoptimized={theme?.backgroundImagePath?.startsWith("http")}
           className="object-cover object-center"
         />
         <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,248,220,0.5)_0%,rgba(253,245,230,0.68)_36%,rgba(249,228,191,0.82)_100%)]" />
@@ -805,9 +675,11 @@ export default function PageContent() {
                 </div>
               </div>
             </div>
-            <div className="rounded-full bg-[#d81b21]/10 px-3 py-1 text-[11px] font-bold text-[#b71721]">
-              Kho quà nhà Xing
-            </div>
+            {wheelData.walletEnabled && (
+              <div className="rounded-full bg-[#d81b21]/10 px-3 py-1 text-[11px] font-bold text-[#b71721]">
+                Kho quà nhà Xing
+              </div>
+            )}
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-2 rounded-2xl bg-white p-3 text-sm text-[#6c1a1f]">
@@ -822,211 +694,87 @@ export default function PageContent() {
             
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1.5">
-            {(["spin", "rewards"] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                className={`rounded-2xl px-4 py-3 text-sm font-extrabold transition ${activeTab === tab ? "bg-[#d81b21] text-white shadow-[0_10px_20px_rgba(216,27,33,0.22)]" : "text-[#8f111a]"}`}
-              >
-                {tab === "spin" ? "Vòng Xing May Mắn" : "Phần thưởng của bạn"}
-              </button>
-            ))}
-          </div>
+          {wheelData.walletEnabled && (
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1.5">
+              {(["spin", "rewards"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`rounded-2xl px-4 py-3 text-sm font-extrabold transition ${activeTab === tab ? "bg-[#d81b21] text-white shadow-[0_10px_20px_rgba(216,27,33,0.22)]" : "text-[#8f111a]"}`}
+                >
+                  {tab === "spin" ? "Vòng Xing May Mắn" : "Phần thưởng của bạn"}
+                </button>
+              ))}
+            </div>
+          )}
         </header>
 
-        {activeTab === "spin" ? (
+        {activeTab === "spin" || !wheelData.walletEnabled ? (
           <>
             <section
               ref={spinSectionRef}
               className="relative mt-6 rounded-[34px] px-3 sm:px-4 pb-6 pt-7 shadow-[0_24px_48px_rgba(120,24,30,0.12)]"
               style={{
-                backgroundImage: "url('/images/nenchosectionvongquay.webp')",
+                backgroundColor: theme?.sectionBackgroundColor ?? undefined,
+                backgroundImage: `url('${theme?.sectionBackgroundImagePath ?? "/images/nenchosectionvongquay.webp"}')`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }}
             >
               <div className="relative mx-auto h-[112px] max-w-[320px]">
-                <Image
-                  src="/images/text.webp"
-                  alt="Vòng Xing May Mắn"
-                  width={320}
-                  height={112}
-                  priority
-                  className="object-contain"
-                />
-
-                <div className="pointer-events-none absolute -top-0 -left-6 h-[50px] w-[50px] sm:h-[48px] sm:w-[48px]">
-                  <Image
-                    src="/images/vuongmien.webp"
-                    alt="Vương miện trang trí"
-                    fill
-                    sizes="50px"
-                    className="object-contain rotate-[0deg]"
-                  />
-                </div>
-
-                <div className="pointer-events-none absolute left-[-20px] top-[50px] h-[100px] w-[100px] sm:h-[30px] sm:w-[30px]">
-                  <Image
-                    src="/images/blinkicon.webp"
-                    alt="Hiệu ứng lấp lánh"
-                    fill
-                    sizes="100px"
-                    className="object-contain"
-                  />
-                </div>
-
-                <div className="pointer-events-none absolute -right-8 top-8 h-[100px] w-[100px] sm:h-[72px] sm:w-[72px]">
-                  <Image
-                    src="/images/hopquafull.webp"
-                    alt="Hộp quà trang trí"
-                    fill
-                    sizes="100px"
-                    className="object-contain rotate-[20deg]"
-                  />
-                </div>
-                <div className="pointer-events-none absolute right-4 -top-10 h-[70px] w-[70px] sm:h-[72px] sm:w-[72px]">
-                  <Image
-                    src="/images/blink2.webp"
-                    alt="Hộp quà trang trí"
-                    fill
-                    sizes="70px"
-                    className="object-contain rotate-[20deg]"
-                  />
-                </div>
+                {headerDecorElements.map((element) => (
+                  <ThemeDecorElement key={element.id} element={element} />
+                ))}
               </div>
 
               {/* Wrapper relative để các icon absolute tràn ra ngoài */}
               <div className="relative mx-auto mt-2 w-full max-w-[420px] sm:max-w-[460px] h-[420px] sm:h-[460px]">
-                <Image
-                  src="/images/khungvongquay.webp"
-                  alt="Khung vòng quay"
-                  fill
-                  sizes="(max-width: 640px) 420px, 460px"
-                  className="object-contain"
-                />
-                <motion.div
-                  animate={{ rotate: rotation }}
-                  transition={{
-                    duration: duration / 1000,
-                    ease: [0.12, 0, 0.2, 1],
-                  }}
-                  className="absolute left-1/2 top-1/2 h-[290px] w-[290px] sm:h-[310px] sm:w-[310px] -translate-x-1/2 -translate-y-[64%] rounded-full"
-                >
-                  <Image
-                    src="/images/vongtron.webp"
-                    alt="Mặt vòng quay"
-                    fill
-                    sizes="(max-width: 640px) 290px, 310px"
-                    className="object-contain"
-                  />
-                </motion.div>
-
-                {/* Mũi tên */}
-                <div className="pointer-events-none absolute left-1/2 top-1/2 mt-2 z-20 h-[80px] w-[80px] -translate-x-1/2 -translate-y-[120%]">
-                  <Image
-                    src="/images/muiten.webp"
-                    alt="Mũi tên vòng quay"
-                    fill
-                    sizes="180px"
-                    className="object-contain drop-shadow-[0_8px_16px_rgba(120,24,30,0.22)]"
-                  />
-                </div>
-
-                {/* ── ICON PHẢI: Gấu/Hổ ── tràn phải, tụt xuống dưới */}
-                <div
-                  className="pointer-events-none absolute h-[150px] w-[150px] sm:h-[180px] sm:w-[180px]"
-                  style={{
-                    bottom: "-70px",
-                    right: "-40px",
-                    zIndex: 30,
-                  }}
-                >
-                  <Image
-                    src="/images/iconnguongmo.webp"
-                    alt="Gấu dễ thương nhìn lên vòng quay"
-                    fill
-                    sizes="100px"
-                    className="object-contain drop-shadow-[0_8px_14px_rgba(120,24,30,0.2)]"
-                  />
-                </div>
-
-                {/* ── ICON TRÁI: Hộp quà ── tràn trái, tụt xuống */}
-                <div
-                  className="pointer-events-none absolute h-[130px] w-[130px] sm:h-[155px] sm:w-[155px]"
-                  style={{
-                    bottom: "-80px",
-                    left: "-40px",
-                    zIndex: 30,
-                    transform: "rotate(10deg)",
-                  }}
-                >
-                  <Image
-                    src="/images/HopQua.webp"
-                    alt="Hộp quà"
-                    fill
-                    sizes="155px"
-                    className="object-contain drop-shadow-[0_8px_14px_rgba(120,24,30,0.2)]"
-                  />
-                </div>
-
-                {/* ── ICON TRÁI: Túi 3 gáy ── tràn trái nhất */}
-                <div
-                  className="pointer-events-none absolute h-[100px] w-[100px]"
-                  style={{
-                    bottom: "-10px",
-                    left: "-70px",
-                    zIndex: 29,
-                    transform: "rotate(-15deg)",
-                  }}
-                >
-                  <Image
-                    src="/images/tui3gang.webp"
-                    alt="Túi 3 gáy"
-                    fill
-                    sizes="100px"
-                    className="object-contain drop-shadow-[0_2px_4px_rgba(120,24,30,0.15)]"
-                  />
-                </div>
-
-                {/* ── ICON TRÁI: Quạt ── giữa trái */}
-                <div
-                  className="pointer-events-none absolute h-[90px] w-[90px]"
-                  style={{
-                    bottom: "-20px",
-                    left: "10px",
-                    zIndex: 29,
-                    transform: "rotate(20deg)",
-                  }}
-                >
-                  <Image
-                    src="/images/quat.webp"
-                    alt="Quạt"
-                    fill
-                    sizes="90px"
-                    className="object-contain drop-shadow-[0_2px_4px_rgba(120,24,30,0.15)]"
-                  />
-                </div>
-
-                {/* ── ICON TRÁI: Bình nước ── gần giữa hơn */}
-                <div
-                  className="pointer-events-none absolute h-[90px] w-[90px]"
-                  style={{
-                    bottom: "-15px",
-                    left: "-25px",
-                    zIndex: 29,
-                    transform: "rotate(4deg)",
-                  }}
-                >
-                  <Image
-                    src="/images/binhnuoc.webp"
-                    alt="Bình nước"
-                    fill
-                    sizes="90px"
-                    className="object-contain drop-shadow-[0_2px_4px_rgba(120,24,30,0.15)]"
-                  />
-                </div>
+                {themeElements
+                  .filter((element) => element.canvas === "wheel")
+                  .map((element) => {
+                    if (element.kind === "wheel_disk") {
+                      return (
+                        <motion.div
+                          key={element.id}
+                          animate={{ rotate: rotation }}
+                          transition={{
+                            duration: duration / 1000,
+                            ease: [0.12, 0, 0.2, 1],
+                          }}
+                          className="rounded-full"
+                          style={themeElementBoxStyle(element)}
+                        >
+                          <Image
+                            src={wheelData.wheelFace?.imagePath ?? "/images/vongtron.webp"}
+                            alt="Mặt vòng quay"
+                            unoptimized={wheelData.wheelFace?.imagePath?.startsWith("http")}
+                            fill
+                            sizes="(max-width: 640px) 290px, 310px"
+                            className="object-contain"
+                          />
+                        </motion.div>
+                      );
+                    }
+                    if (element.kind === "pointer") {
+                      return (
+                        <div
+                          key={element.id}
+                          className="pointer-events-none"
+                          style={computePointerBoxStyle(wheelDiskElement, element)}
+                        >
+                          <Image
+                            src={element.imagePath ?? "/images/muiten.webp"}
+                            alt="Mũi tên vòng quay"
+                            fill
+                            sizes="180px"
+                            className="object-contain drop-shadow-[0_8px_16px_rgba(120,24,30,0.22)]"
+                          />
+                        </div>
+                      );
+                    }
+                    return <ThemeDecorElement key={element.id} element={element} />;
+                  })}
               </div>
             </section>
 
@@ -1037,16 +785,25 @@ export default function PageContent() {
               <button
                 type="button"
                 onClick={handleSpinStart}
-                disabled={isSpinning || localSpinBlocked || isSpinPeriodOver()}
-                className="w-full mt-6 rounded-[24px] border-2 border-white bg-[#d81b21] px-8 py-4 text-2xl font-black text-[#f2f6dd] shadow-[0_8px_0_rgb(139,25,32)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
+                disabled={
+                  isSpinning ||
+                  dailyLimitReached ||
+                  !storeCode ||
+                  !wheelData.campaignOpen
+                }
+                className="w-full mt-6 rounded-[24px] border-2 border-white px-8 py-4 text-2xl font-black shadow-[0_8px_0_rgb(139,25,32)] transition active:translate-y-1 active:shadow-none disabled:opacity-70"
+                style={{
+                  backgroundColor: theme?.spinButtonColor ?? "#d81b21",
+                  color: theme?.spinButtonTextColor ?? "#f2f6dd",
+                }}
               >
                 {isSpinning
                   ? "Đang quay..."
-                  : isSpinPeriodOver()
+                  : !wheelData.campaignOpen
                     ? "Quá hạn thời gian quay"
-                    : hasReachedSpinLimit
+                    : dailyLimitReached
                       ? "Đã hết lượt quay hôm nay"
-                      : "Quay ngay"}
+                      : (theme?.spinButtonText ?? "Quay ngay")}
               </button>
 
               {formError && (
@@ -1154,7 +911,7 @@ export default function PageContent() {
                         void handleUseReward(item.id);
                       }}
                       disabled={
-                        usedRewardCount >= 3 ||
+                        dailyUsageLimitReached ||
                         item.quantity <= 0 ||
                         useRewardLoading ||
                         isVoucherNotUsableYet(item.voucherUsableFrom) ||
@@ -1168,7 +925,7 @@ export default function PageContent() {
                           ? "Chưa tới hạn sử dụng"
                           : isVoucherExpired(item.voucherExpiresAt)
                             ? "Voucher đã hết hạn"
-                            : usedRewardCount >= 3
+                            : dailyUsageLimitReached
                               ? "Hôm nay đã dùng đủ 3 voucher"
                               : "Sử dụng voucher này"}
                     </button>
@@ -1193,140 +950,7 @@ export default function PageContent() {
         )}
       </div>
 
-      {/* ─── UNBOX ANIMATION OVERLAY ─── */}
-      {/* Hiện ngay sau khi vòng quay dừng, z-40 (dưới modal z-50) */}
-      <AnimatePresence>
-        {showUnboxAnimation && (
-          <motion.div
-            className="fixed inset-0 z-40 flex items-center justify-center"
-            style={{ backgroundColor: "rgba(0,0,0,0.72)" }}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.35 }}
-          >
-            {/* Container hộp quà */}
-            <div className="relative h-[900px] w-[900px]">
-              {/* hopquafull: lắc lắc 1s mạnh hơn, rồi ẩn dần */}
-              <motion.div
-                className="absolute h-[680px] w-[680px]"
-                style={{
-                  left: "50%",
-                  top: "50%",
-                  x: "-50%",
-                  y: "-50%",
-                }}
-                initial={{ opacity: 1, scale: 1, rotate: 0 }}
-                animate={{
-                  rotate: [0, -6, 6, -6, 6, -4, 4, -4, 4, 0],
-                  opacity: [1, 1, 1, 0],
-                  scale: [1, 1, 1, 0.85],
-                }}
-                transition={{
-                  rotate: { duration: 1, delay: 0, ease: "easeInOut" },
-                  opacity: { duration: 0.8, delay: 1, ease: "easeInOut" },
-                  scale: { duration: 0.8, delay: 1, ease: "easeInOut" },
-                }}
-              >
-                <Image
-                  src="/images/hopquafull.webp"
-                  alt="Hộp quà đóng"
-                  fill
-                  sizes="680px"
-                  className="object-contain"
-                />
-              </motion.div>
-
-              {/* hopquakhongnap: bay xuống trái 4s */}
-              <motion.div
-                className="absolute h-[560px] w-[560px]"
-                style={{
-                  left: "50%",
-                  top: "50%",
-                  x: "-50%",
-                  y: "-50%",
-                }}
-                initial={{ opacity: 0, x: "-50%", y: "-50%" }}
-                animate={{
-                  opacity: 1,
-                  x: "calc(-50% - 280px)",
-                  y: "calc(-50% + 280px)",
-                  rotate: -15,
-                }}
-                transition={{
-                  duration: 3,
-                  delay: 1,
-                  ease: [0.25, 0.46, 0.45, 0.94],
-                }}
-              >
-                <Image
-                  src="/images/hopquakhongnap.webp"
-                  alt="Hộp quà không nắp"
-                  fill
-                  sizes="560px"
-                  className="object-contain"
-                />
-              </motion.div>
-
-              {/* napqua: bay lên phải 4s */}
-              <motion.div
-                className="absolute h-[500px] w-[500px]"
-                style={{
-                  left: "50%",
-                  top: "50%",
-                  x: "-50%",
-                  y: "-50%",
-                }}
-                initial={{ opacity: 0, x: "-50%", y: "-50%" }}
-                animate={{
-                  opacity: 1,
-                  x: "calc(-50% + 360px)",
-                  y: "calc(-50% - 360px)",
-                  rotate: 28,
-                }}
-                transition={{
-                  duration: 3,
-                  delay: 1,
-                  ease: [0.25, 0.46, 0.45, 0.94],
-                }}
-              >
-                <Image
-                  src="/images/napqua.webp"
-                  alt="Nắp quà"
-                  fill
-                  sizes="500px"
-                  className="object-contain"
-                />
-              </motion.div>
-
-              {/* Emoji 🎉 xuất hiện sau khi hộp đã mở xong */}
-              <motion.div
-                className="absolute left-1/2 top-8 -translate-x-1/2 text-7xl"
-                initial={{ opacity: 0, y: 30, scale: 0.4 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{
-                  duration: 0.5,
-                  delay: 5.3,
-                  ease: [0.34, 1.56, 0.64, 1],
-                }}
-              >
-                🎉
-              </motion.div>
-
-              {/* Text xuất hiện cùng lúc với emoji */}
-              <motion.p
-                className="absolute bottom-16 left-1/2 -translate-x-1/2 whitespace-nowrap text-2xl font-black text-white"
-                style={{ textShadow: "0 2px 12px rgba(0,0,0,0.5)" }}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: 5.4 }}
-              >
-                Chúc mừng bạn đã trúng thưởng! 🎊
-              </motion.p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <RevealAnimation variant={revealAnimation} playing={showUnboxAnimation} />
 
       {/* ─── MODAL THÔNG TIN NGƯỜI CHƠI ─── */}
       <Modal
@@ -1377,6 +1001,29 @@ export default function PageContent() {
               />
             </div>
           </div>
+          {wheelData.minInvoiceAmount != null && (
+            <div className="space-y-1">
+              <label className="ml-1 text-sm font-bold text-gray-700">
+                Số tiền hoá đơn (đ)
+              </label>
+              <div className="relative">
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  required
+                  placeholder={`Từ ${wheelData.minInvoiceAmount.toLocaleString("vi-VN")}đ trở lên`}
+                  className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-4 pr-4 outline-none transition focus:border-[#d81b21]"
+                  value={invoiceAmountInput}
+                  onChange={(e) =>
+                    setInvoiceAmountInput(e.target.value.replace(/[^\d]/g, ""))
+                  }
+                />
+              </div>
+              <p className="ml-1 text-xs font-medium text-gray-500">
+                Vui lòng nhập đúng số tiền trên hoá đơn để đủ điều kiện quay.
+              </p>
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}
@@ -1443,7 +1090,9 @@ export default function PageContent() {
               animate={{ opacity: 1 }}
               transition={{ delay: 0.25, duration: 0.3 }}
             >
-              Quà vừa trúng đã được cộng dồn vào kho quà của bạn.
+              {rewardResult?.type === "voucher"
+                ? "Quà vừa trúng đã được cộng dồn vào kho quà của bạn."
+                : "Vui lòng đưa màn hình này cho nhân viên để nhận quà ngay."}
             </motion.p>
           </div>
           <motion.div

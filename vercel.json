@@ -1,9 +1,6 @@
 {
   "buildCommand": "next build",
   "installCommand": "npm install",
-  "env": {
-    "SPIN_DATA_BACKEND": "firebase"
-  },
   "headers": [
     {
       "source": "/images/:path*",

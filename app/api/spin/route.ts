@@ -1,114 +1,78 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { toSpinErrorCode, type SpinErrorCode } from "@/lib/db/types";
 
-import { PLAY_SESSION_MISMATCH_MESSAGE } from "@/lib/spins/play-session-constants";
-import { doSpinAndPersist } from "@/lib/spins/google-sheets-store";
-
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+const ERROR_MESSAGES: Record<SpinErrorCode, string> = {
+  invalid_name: "Vui lòng nhập đầy đủ họ tên.",
+  invalid_phone: "Vui lòng nhập số điện thoại hợp lệ.",
+  unknown_store:
+    "Không xác định được cửa hàng. Vui lòng truy cập bằng liên kết của cửa hàng.",
+  campaign_not_configured: "Chương trình quay thưởng chưa được cấu hình.",
+  campaign_not_started: "Chương trình quay thưởng chưa bắt đầu.",
+  campaign_ended: "Chương trình quay thưởng đã kết thúc.",
+  daily_limit_reached: "Bạn đã dùng hết lượt quay hôm nay.",
+  invoice_amount_too_low: "Hóa đơn chưa đạt mức tối thiểu để quay.",
+  no_prizes_available: "Rất tiếc, phần quà hôm nay đã hết.",
+  no_active_wheel: "Vòng quay hiện chưa sẵn sàng, vui lòng thử lại sau.",
+  prize_not_mapped_to_wheel:
+    "Vòng quay hiện chưa sẵn sàng, vui lòng thử lại sau.",
+  assigned_prize_missing:
+    "Có lỗi khi áp dụng phần quà được chỉ định trước. Vui lòng liên hệ quản trị viên.",
+};
+
+export async function POST(request: Request) {
+  let body: {
+    storeCode?: string;
+    name?: string;
+    phone?: string;
+    invoiceAmount?: number | null;
+  };
   try {
-    const body = await req.json();
-    const name = String(body?.name ?? "").trim();
-    const phone = String(body?.phone ?? "").trim();
-    const visitorId = String(
-      body?.visitorId ?? body?.deviceFingerprint ?? "",
-    ).trim();
-    const locationId = String(body?.locationId ?? "").trim();
-    const sessionId = String(body?.sessionId ?? "").trim();
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+  }
 
-    if (!name || !phone || !visitorId || !locationId || !sessionId) {
-      return NextResponse.json(
-        {
-          error: "Missing name, phone, visitorId, locationId or sessionId",
-        },
-        { status: 400 },
-      );
-    }
+  const storeCode = (body.storeCode ?? "").trim();
+  const name = (body.name ?? "").trim();
+  const phone = (body.phone ?? "").trim();
+  const invoiceAmount =
+    typeof body.invoiceAmount === "number" && Number.isFinite(body.invoiceAmount)
+      ? body.invoiceAmount
+      : null;
 
-    const spin = await doSpinAndPersist({
-      visitorId,
-      locationId,
-      customerName: name,
-      customerPhone: phone,
-      sessionId,
-    });
-
-    return NextResponse.json({
-      success: true,
-      backend: "google-sheets",
-      spinId: spin.spinLog.spinLogId,
-      rewardIndex: spin.spinLog.rewardId,
-      reward: {
-        id: spin.spinLog.rewardId,
-        label: spin.spinLog.rewardLabel,
-        type: spin.spinLog.rewardType,
-        code: spin.spinLog.rewardCode,
-        voucherDelayMinutes: 0,
-        voucherUsableFrom: spin.voucher?.issuedAt ?? null,
-        voucherExpiresAt: spin.voucher?.expireAt ?? null,
-      },
-      voucher: spin.voucher,
-      limits: spin.limits,
-      locationId: spin.spinLog.locationId,
-      campaignId: spin.spinLog.campaignId,
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (detail === "SESSION_MISMATCH") {
-      return NextResponse.json(
-        {
-          code: detail,
-          message: PLAY_SESSION_MISMATCH_MESSAGE,
-        },
-        { status: 403 },
-      );
-    }
-
-    if (detail === "DAILY_DEVICE_LIMIT_REACHED") {
-      return NextResponse.json(
-        {
-          code: detail,
-          message: "Thiết bị này đã dùng hết 3 lượt quay hôm nay.",
-          maxSpinsToday: 3,
-          spinsUsedToday: 3,
-        },
-        { status: 409 },
-      );
-    }
-
-    if (detail === "INVALID_LOCATION") {
-      return NextResponse.json(
-        { code: detail, message: "Chi nhánh không hợp lệ." },
-        { status: 409 },
-      );
-    }
-
-    if (detail === "CAMPAIGN_NOT_STARTED") {
-      return NextResponse.json(
-        { code: detail, message: "Chi nhánh chưa đến thời gian quay thưởng." },
-        { status: 409 },
-      );
-    }
-
-    if (detail === "CAMPAIGN_ENDED") {
-      return NextResponse.json(
-        { code: detail, message: "Chi nhánh đã kết thúc chương trình quay." },
-        { status: 409 },
-      );
-    }
-
-    const codeToStatus: Record<string, number> = {
-      INVALID_LOCATION: 409,
-      CAMPAIGN_NOT_STARTED: 409,
-      CAMPAIGN_ENDED: 409,
-      DAILY_DEVICE_LIMIT_REACHED: 409,
-      SESSION_MISMATCH: 403,
-      NO_PRIZE_CONFIGURED: 500,
-    };
+  if (!storeCode) {
     return NextResponse.json(
-      { error: "Internal Server Error", code: detail },
-      { status: codeToStatus[detail] ?? 500 },
+      { error: "unknown_store", message: ERROR_MESSAGES.unknown_store },
+      { status: 400 },
     );
   }
+
+  const supabase = createSupabaseServiceClient();
+  const { data, error } = await supabase.rpc("fn_spin", {
+    p_store_code: storeCode,
+    p_name: name,
+    p_phone: phone,
+    p_invoice_amount: invoiceAmount,
+  });
+
+  if (error) {
+    const code = toSpinErrorCode(error.message);
+    let message = ERROR_MESSAGES[code];
+    if (code === "invoice_amount_too_low") {
+      const { data: settings } = await supabase
+        .from("campaign_settings")
+        .select("min_invoice_amount")
+        .eq("id", 1)
+        .maybeSingle();
+      if (settings?.min_invoice_amount) {
+        message = `Hóa đơn phải từ ${Number(settings.min_invoice_amount).toLocaleString("vi-VN")}đ trở lên mới được quay.`;
+      }
+    }
+    return NextResponse.json({ error: code, message }, { status: 400 });
+  }
+
+  return NextResponse.json(data);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import PageContent from "./PageContent";
 
 export default function Page() {
@@ -13,5 +13,9 @@ export default function Page() {
 
   if (!mounted) return null;
 
-  return <PageContent />;
+  return (
+    <Suspense fallback={null}>
+      <PageContent />
+    </Suspense>
+  );
 }

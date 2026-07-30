@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  // Allow access to remote image placeholder.
+  // Allow access to remote image placeholder + Supabase Storage (wheel-face images).
   images: {
     remotePatterns: [
       {
@@ -17,13 +17,27 @@ const nextConfig: NextConfig = {
         port: "",
         pathname: "/**", // This allows any path under the hostname
       },
+      {
+        protocol: "https",
+        hostname: "*.supabase.co",
+        port: "",
+        pathname: "/storage/v1/object/public/**",
+      },
     ],
   },
   output: "standalone",
   transpilePackages: ["motion"],
+  // Native binary module (chart rendering for Excel export) — must not be
+  // bundled by webpack, only required at runtime on the server.
+  serverExternalPackages: ["@napi-rs/canvas"],
 
   // ✅ Cache Headers - Reduce bandwidth by 75%
+  // Only applied for production builds (`next start`) — in `next dev` these
+  // chunk filenames are NOT content-hashed, so a 1-year "immutable" cache
+  // would keep serving stale JS to the browser after every dev-server
+  // restart, no matter what the source code says.
   async headers() {
+    if (process.env.NODE_ENV !== "production") return [];
     return [
       {
         source: "/images/:path*",
