@@ -1,8 +1,58 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 
 type Store = { code: string; name: string; active: boolean; managerEmail: string | null };
+
+function storeLink(code: string): string {
+  return `${window.location.origin}/?store=${encodeURIComponent(code)}`;
+}
+
+/** Composes a printable PNG — store name on top, QR code below — so a stack
+ * of downloaded files stays easy to tell apart at a glance. */
+async function downloadStoreQr(store: Store) {
+  const qrDataUrl = await QRCode.toDataURL(storeLink(store.code), {
+    width: 480,
+    margin: 1,
+  });
+  const qrImg = new Image();
+  await new Promise<void>((resolve, reject) => {
+    qrImg.onload = () => resolve();
+    qrImg.onerror = () => reject(new Error("Không tạo được mã QR."));
+    qrImg.src = qrDataUrl;
+  });
+
+  const padding = 32;
+  const titleHeight = 64;
+  const qrSize = qrImg.width;
+  const canvas = document.createElement("canvas");
+  canvas.width = qrSize + padding * 2;
+  canvas.height = qrSize + titleHeight + padding * 2;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Trình duyệt không hỗ trợ tạo ảnh.");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#111827";
+  ctx.font = "bold 28px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(
+    store.name,
+    canvas.width / 2,
+    padding + titleHeight / 2,
+    canvas.width - padding * 2,
+  );
+  ctx.drawImage(qrImg, padding, padding + titleHeight, qrSize, qrSize);
+
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL("image/png");
+  a.download = `QR-${store.code}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 
 export default function StoresPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -10,6 +60,8 @@ export default function StoresPage() {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ code: "", name: "" });
   const [creating, setCreating] = useState(false);
+  const [qrPreviews, setQrPreviews] = useState<Record<string, string>>({});
+  const [downloadingCode, setDownloadingCode] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -29,6 +81,40 @@ export default function StoresPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  const storeCodes = stores.map((s) => s.code).join(",");
+  useEffect(() => {
+    if (!storeCodes) return;
+    let cancelled = false;
+    (async () => {
+      const codes = storeCodes.split(",");
+      const entries = await Promise.all(
+        codes.map(async (code) => {
+          const dataUrl = await QRCode.toDataURL(storeLink(code), {
+            width: 72,
+            margin: 0,
+          });
+          return [code, dataUrl] as const;
+        }),
+      );
+      if (!cancelled) setQrPreviews(Object.fromEntries(entries));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [storeCodes]);
+
+  async function handleDownloadQr(store: Store) {
+    setError(null);
+    setDownloadingCode(store.code);
+    try {
+      await downloadStoreQr(store);
+    } catch (e: any) {
+      setError(e?.message ?? "Tải mã QR thất bại.");
+    } finally {
+      setDownloadingCode(null);
+    }
+  }
 
   async function toggleActive(code: string, active: boolean) {
     setError(null);
@@ -149,6 +235,7 @@ export default function StoresPage() {
               <th className="px-4 py-3 text-left">Mã</th>
               <th className="px-4 py-3 text-left">Tên/địa chỉ</th>
               <th className="px-4 py-3 text-left">Link quay</th>
+              <th className="px-4 py-3 text-left">Mã QR</th>
               <th className="px-4 py-3 text-left">Email quản lý</th>
               <th className="px-4 py-3 text-left">Đang hoạt động</th>
             </tr>
@@ -156,14 +243,14 @@ export default function StoresPage() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
                   Đang tải...
                 </td>
               </tr>
             )}
             {!loading && stores.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
                   Chưa có cửa hàng nào.
                 </td>
               </tr>
@@ -175,6 +262,28 @@ export default function StoresPage() {
                 </td>
                 <td className="px-4 py-3 text-gray-700">{s.name}</td>
                 <td className="px-4 py-3 text-gray-500">{`/?store=${s.code}`}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    {qrPreviews[s.code] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={qrPreviews[s.code]}
+                        alt={`Mã QR ${s.name}`}
+                        className="h-9 w-9 rounded border border-gray-200"
+                      />
+                    ) : (
+                      <div className="h-9 w-9 rounded border border-gray-200 bg-gray-50" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleDownloadQr(s)}
+                      disabled={downloadingCode === s.code}
+                      className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {downloadingCode === s.code ? "Đang tạo..." : "Tải QR"}
+                    </button>
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <input
                     type="text"
