@@ -821,10 +821,16 @@ export default function ThemeDesignerPage() {
                           </label>
                           <input
                             type="number"
-                            value={Math.round(selected.distancePx ?? -150)}
+                            value={Math.round(selected.distancePx ?? -15)}
                             onChange={(e) => updateElementLocal(selected.id, { distancePx: Number(e.target.value) })}
                             className={DARK_INPUT}
                           />
+                          <p className="text-[10px] leading-4 text-[#5b5856]">
+                            Gợi ý: để mũi tên nằm sát viền vòng quay (không bị
+                            lọt vào giữa hoặc bắn ra phía đối diện), dùng
+                            khoảng <strong>−15 đến +15</strong> — quan sát
+                            canvas bên trái khi gõ số để chỉnh cho đúng mắt.
+                          </p>
                         </div>
                         <div className="col-span-2 space-y-1">
                           <label className="text-xs text-[#a19d9c]">Kích thước (%)</label>

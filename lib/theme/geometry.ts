@@ -34,7 +34,13 @@ export function computePointerBoxStyle(
   const centerY = dy + dh / 2;
   const radius = dw / 2;
   const angle = pointer.angleDeg ?? 0;
-  const distance = pointer.distancePx ?? -150;
+  // -150 was the original fallback here and is what caused the pointer to
+  // land past the disk's center (radius ~34 + (-150) ⇒ deep negative
+  // radius, wrapping to the opposite side) — kept only as a last-resort
+  // default since the one real pointer row always has an explicit value;
+  // -15 sits just inside the rim, matching the intended "slightly overlaps
+  // the wheel" look.
+  const distance = pointer.distancePx ?? -15;
   const rad = (angle * Math.PI) / 180;
   const r = radius + distance;
   const pointerCenterX = centerX + r * Math.sin(rad);
