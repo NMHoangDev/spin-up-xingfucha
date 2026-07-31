@@ -27,7 +27,11 @@ import type {
   PageThemeElement,
   RevealAnimation as RevealAnimationType,
 } from "@/lib/db/types";
-import { themeElementBoxStyle, computePointerBoxStyle } from "@/lib/theme/geometry";
+import {
+  themeElementBoxStyle,
+  computePointerBoxStyle,
+  pointerReadingAngleDeg,
+} from "@/lib/theme/geometry";
 
 type UserInfo = { name: string; phone: string };
 type ActiveTab = "spin" | "rewards";
@@ -352,7 +356,13 @@ export default function PageContent() {
       ),
     [themeElements],
   );
-  const pointerAngleDeg = pointerElement?.angleDeg ?? 0;
+  /** Where the arrow actually points on screen — not just its angle around
+   * the wheel, which says nothing once it's parked on the hub. The spin has
+   * to stop the winning slice here or the wheel and the result modal disagree. */
+  const pointerAngleDeg = useMemo(
+    () => (pointerElement ? pointerReadingAngleDeg(wheelDiskElement, pointerElement) : 0),
+    [pointerElement, wheelDiskElement],
+  );
   const revealAnimation: RevealAnimationType = theme?.revealAnimation ?? "box_open";
 
   useEffect(() => {

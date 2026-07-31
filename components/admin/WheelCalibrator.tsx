@@ -1,6 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PageThemeElement } from "@/lib/db/types";
+import {
+  normalizeAngle,
+  pointerPositionMode,
+  pointerPositionPreset,
+  pointerReadingAngleDeg,
+} from "@/lib/theme/geometry";
 
 type Prize = { id: string; label: string; isActive: boolean; sortOrder: number };
 type SliceApi = {
@@ -9,19 +16,8 @@ type SliceApi = {
   endAngle: number;
   prizeId: string | null;
 };
-type ThemeElement = {
-  id: string;
-  kind: "image" | "text" | "wheel_disk" | "pointer";
-  width: number | null;
-  distancePx: number | null;
-  rotation: number;
-};
 
-const POINTER_EDGE_DISTANCE_PX = 8;
-const POINTER_EDGE_ROTATION = 180;
-const POINTER_CENTER_ROTATION = 0;
 const POINTER_ROTATION_PRESETS = [0, 90, 180, 270];
-const DEFAULT_DISK_WIDTH = 67.4;
 
 const SIZE = 320;
 const CENTER = SIZE / 2;
@@ -66,8 +62,8 @@ export default function WheelCalibrator({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [pointerElement, setPointerElement] = useState<ThemeElement | null>(null);
-  const [diskElement, setDiskElement] = useState<ThemeElement | null>(null);
+  const [pointerElement, setPointerElement] = useState<PageThemeElement | null>(null);
+  const [diskElement, setDiskElement] = useState<PageThemeElement | null>(null);
   const [pointerUpdating, setPointerUpdating] = useState(false);
   const [pointerError, setPointerError] = useState<string | null>(null);
   const draggingRef = useRef<number | null>(null);
@@ -80,7 +76,7 @@ export default function WheelCalibrator({
       const res = await fetch("/api/admin/theme/elements");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Không tải được vị trí mũi tên.");
-      const items: ThemeElement[] = json.items ?? [];
+      const items: PageThemeElement[] = json.items ?? [];
       setPointerElement(items.find((e) => e.kind === "pointer") ?? null);
       setDiskElement(items.find((e) => e.kind === "wheel_disk") ?? null);
     } catch (e: any) {
@@ -92,16 +88,14 @@ export default function WheelCalibrator({
     void loadPointerElement();
   }, []);
 
-  const wheelRadius = (diskElement?.width ?? DEFAULT_DISK_WIDTH) / 2;
-  const pointerCenterDistancePx = -wheelRadius;
-  const pointerMode: "edge" | "center" | "custom" =
-    pointerElement == null
-      ? "edge"
-      : Math.round(pointerElement.distancePx ?? -15) === POINTER_EDGE_DISTANCE_PX
-        ? "edge"
-        : Math.round(pointerElement.distancePx ?? -15) === Math.round(pointerCenterDistancePx)
-          ? "center"
-          : "custom";
+  const pointerMode = pointerElement
+    ? pointerPositionMode(diskElement ?? undefined, pointerElement)
+    : "edge";
+  /** The ô under the arrow is decided by where the arrow actually points, so
+   * the preview below has to use the same angle the customer page lands on. */
+  const pointerReadAngle = pointerElement
+    ? pointerReadingAngleDeg(diskElement ?? undefined, pointerElement)
+    : 0;
 
   async function patchPointer(patch: { distancePx?: number; rotation?: number }) {
     if (!pointerElement) return;
@@ -123,14 +117,15 @@ export default function WheelCalibrator({
     }
   }
 
-  /** Bundles the rotation that matches each position — at the rim the tip
-   * should point inward at the wheel (180°), at dead center there's no rim
-   * to point at anymore so the badge sits in its default artwork
-   * orientation (0°). Manual rotation below can still override this. */
+  /** Bundles the rotation that matches each position, so the tip keeps
+   * pointing at the same ô either way — at the rim it turns back inward at
+   * the wheel, on the hub it points outward along its own angle. Manual
+   * rotation below can still override this. */
   async function setPointerMode(mode: "edge" | "center") {
-    const distancePx = mode === "edge" ? POINTER_EDGE_DISTANCE_PX : pointerCenterDistancePx;
-    const rotation = mode === "edge" ? POINTER_EDGE_ROTATION : POINTER_CENTER_ROTATION;
-    await patchPointer({ distancePx, rotation });
+    if (!pointerElement) return;
+    await patchPointer(
+      pointerPositionPreset(mode, diskElement ?? undefined, pointerElement),
+    );
   }
 
   async function load() {
@@ -259,7 +254,10 @@ export default function WheelCalibrator({
     [boundaries, slicePrizes],
   );
 
-  const pointerOriginalAngle = (((360 - testRotation) % 360) + 360) % 360;
+  // A slice at face angle `a` shows up on screen at `a + testRotation`, so the
+  // ô sitting under the arrow is the one whose face angle is
+  // `pointerReadAngle - testRotation`.
+  const pointerOriginalAngle = normalizeAngle(pointerReadAngle - testRotation);
   const activeSliceIndex = slices.findIndex(
     (s) =>
       pointerOriginalAngle >= s.startAngle && pointerOriginalAngle < s.endAngle,
@@ -379,8 +377,14 @@ export default function WheelCalibrator({
         <h2 className="text-sm font-semibold text-gray-900">Vị trí mũi tên</h2>
         <p className="mt-1 text-sm text-gray-600">
           Áp dụng cho mũi tên thật trên trang khách quay (không riêng mặt vòng
-          quay này). Đổi vị trí không ảnh hưởng đến việc xác định ô trúng khi
-          quay — vẫn chính xác như khi ở mép vòng.
+          quay này). Hai nút dưới đây đổi vị trí <em>và</em> xoay hình cho khớp,
+          nên ô trúng vẫn giữ nguyên: vòng quay luôn dừng đúng ô mà đầu mũi tên
+          đang chỉ vào.
+        </p>
+        <p className="mt-1 text-sm text-gray-600">
+          Đầu mũi tên hiện chỉ vào hướng{" "}
+          <strong>{Math.round(pointerReadAngle)}°</strong> (0° = trên đỉnh, tính
+          theo chiều kim đồng hồ).
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           <button
@@ -414,7 +418,9 @@ export default function WheelCalibrator({
 
         <p className="mt-3 text-sm text-gray-600">
           Xoay hướng mũi tên (đổi mép/giữa ở trên đã tự xoay về hướng đúng —
-          dùng phần này nếu muốn hướng khác):
+          dùng phần này nếu muốn hướng khác).
+          {pointerMode === "center" &&
+            " Mũi tên đang ở giữa vòng quay nên góc xoay này chính là hướng chỉ ô trúng — đổi nó là đổi ô mà vòng quay sẽ dừng lại."}
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {POINTER_ROTATION_PRESETS.map((deg) => (
@@ -461,20 +467,33 @@ export default function WheelCalibrator({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
           >
+            {/* Sits at the angle the real arrow points at, not always at the
+                top — rotating the full-size wrapper about the wheel's center
+                carries the top-centre triangle round to that angle while it
+                keeps facing inward. */}
             <div
               style={{
                 position: "absolute",
-                left: "50%",
-                top: -6,
-                transform: "translateX(-50%)",
+                inset: 0,
                 zIndex: 20,
-                width: 0,
-                height: 0,
-                borderLeft: "10px solid transparent",
-                borderRight: "10px solid transparent",
-                borderTop: "16px solid #d81b21",
+                pointerEvents: "none",
+                transform: `rotate(${pointerReadAngle}deg)`,
               }}
-            />
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: -6,
+                  transform: "translateX(-50%)",
+                  width: 0,
+                  height: 0,
+                  borderLeft: "10px solid transparent",
+                  borderRight: "10px solid transparent",
+                  borderTop: "16px solid #d81b21",
+                }}
+              />
+            </div>
             <div
               style={{
                 position: "absolute",

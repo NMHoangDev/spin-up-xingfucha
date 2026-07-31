@@ -24,7 +24,12 @@ import RevealAnimation, {
   REVEAL_ANIMATION_OPTIONS,
   type RevealAnimationVariant,
 } from "@/components/spin/RevealAnimation";
-import { elementLabel, DEFAULT_DISK } from "@/lib/theme/geometry";
+import {
+  elementLabel,
+  pointerPositionMode,
+  pointerPositionPreset,
+  pointerReadingAngleDeg,
+} from "@/lib/theme/geometry";
 
 type PageTheme = {
   backgroundColor: string | null;
@@ -338,10 +343,9 @@ export default function ThemeDesignerPage() {
 
   const selected = elements.find((e) => e.id === selectedId) ?? null;
   const layers = [...elements].sort((a, b) => b.zIndex - a.zIndex);
-  const wheelRadius =
-    (elements.find((e) => e.kind === "wheel_disk")?.width ?? DEFAULT_DISK.width) / 2;
-  const pointerEdgeDistancePx = 8;
-  const pointerCenterDistancePx = -wheelRadius;
+  const diskElement = elements.find((e) => e.kind === "wheel_disk");
+  const pointerMode =
+    selected?.kind === "pointer" ? pointerPositionMode(diskElement, selected) : null;
 
   return (
     <div className="space-y-4">
@@ -854,13 +858,13 @@ export default function ThemeDesignerPage() {
                             <button
                               type="button"
                               onClick={() =>
-                                updateElementLocal(selected.id, {
-                                  distancePx: pointerEdgeDistancePx,
-                                  rotation: 180,
-                                })
+                                updateElementLocal(
+                                  selected.id,
+                                  pointerPositionPreset("edge", diskElement, selected),
+                                )
                               }
                               className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
-                                Math.round(selected.distancePx ?? -15) === pointerEdgeDistancePx
+                                pointerMode === "edge"
                                   ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
                                   : "border-[#353534] bg-[#131313] text-[#c8c5c4] hover:border-[#d81b21]/50"
                               }`}
@@ -870,13 +874,13 @@ export default function ThemeDesignerPage() {
                             <button
                               type="button"
                               onClick={() =>
-                                updateElementLocal(selected.id, {
-                                  distancePx: pointerCenterDistancePx,
-                                  rotation: 0,
-                                })
+                                updateElementLocal(
+                                  selected.id,
+                                  pointerPositionPreset("center", diskElement, selected),
+                                )
                               }
                               className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
-                                Math.round(selected.distancePx ?? -15) === Math.round(pointerCenterDistancePx)
+                                pointerMode === "center"
                                   ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
                                   : "border-[#353534] bg-[#131313] text-[#c8c5c4] hover:border-[#d81b21]/50"
                               }`}
@@ -891,12 +895,17 @@ export default function ThemeDesignerPage() {
                             className={DARK_INPUT}
                           />
                           <p className="text-[10px] leading-4 text-[#5b5856]">
-                            2 nút trên cũng tự xoay hình về đúng hướng (mép =
-                            180°, giữa = 0°) — gõ số tay ở ô &quot;Xoay hình
-                            ảnh&quot; bên trên nếu muốn hướng khác. Khoảng cách
-                            gõ tay: dùng <strong>−15 đến +15</strong> để mũi
-                            tên nằm sát viền vòng quay — quan sát canvas bên
-                            trái khi gõ số để chỉnh cho đúng mắt.
+                            2 nút trên cũng tự xoay hình cho khớp vị trí, nên đầu
+                            mũi tên vẫn chỉ đúng ô cũ — vòng quay luôn dừng ở ô
+                            mà đầu mũi tên chỉ vào, hiện là hướng{" "}
+                            <strong>
+                              {Math.round(pointerReadingAngleDeg(diskElement, selected))}°
+                            </strong>
+                            . Khi mũi tên nằm ở tâm thì chính ô &quot;Xoay hình
+                            ảnh&quot; bên trên quyết định hướng đó. Khoảng cách gõ
+                            tay: dùng <strong>−15 đến +15</strong> để mũi tên nằm
+                            sát viền vòng quay — quan sát canvas bên trái khi gõ
+                            số để chỉnh cho đúng mắt.
                           </p>
                         </div>
                         <div className="col-span-2 space-y-1">
