@@ -10,11 +10,14 @@ import {
   ChevronRight,
   Gift,
   Lock,
+  Phone,
   Sparkles,
   Target,
+  User,
   X,
 } from "lucide-react";
 
+import VersionWatcher from "@/components/VersionWatcher";
 import logoWebp from "@/assets/logo.webp";
 import RevealAnimation, {
   REVEAL_ANIMATION_RESULT_DELAY_MS,
@@ -143,19 +146,6 @@ function readJson<T>(key: string): T | null {
   } catch {
     return null;
   }
-}
-
-/** Customers no longer type a name/phone — this generates a persistent,
- * phone-shaped identifier once per browser (kept only so the existing
- * per-customer daily-spin-limit and wallet APIs, which are keyed on
- * `customer_phone`, keep working without a backend rewrite). It doesn't
- * identify the real person, so admin features that rely on a real phone
- * (chỉ định quà, tìm khách trong CRM) no longer apply to these spins. */
-function generateDeviceProfile(): SavedProfile {
-  const carrierDigit = "35789"[Math.floor(Math.random() * 5)];
-  let rest = "";
-  for (let i = 0; i < 8; i++) rest += Math.floor(Math.random() * 10);
-  return { name: "Khách vãng lai", phone: `0${carrierDigit}${rest}` };
 }
 
 function RewardIcon({
@@ -312,6 +302,7 @@ export default function PageContent() {
   const [confirmError, setConfirmError] = useState("");
   const spinSectionRef = useRef<HTMLDivElement | null>(null);
   const buttonSectionRef = useRef<HTMLDivElement | null>(null);
+  const phoneRegex = /^(0|84)(3|5|7|8|9)([0-9]{8})$/;
 
   const loadWalletItems = async (phone: string) => {
     if (!phone) {
@@ -385,11 +376,10 @@ export default function PageContent() {
       } catch {
         /* fall back to the built-in defaults rendered when theme is null */
       }
-      const profile = readJson<SavedProfile>(PROFILE_KEY) ?? generateDeviceProfile();
-      window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-      if (!cancelled) {
-        setUserInfo(profile);
-        void loadWalletItems(profile.phone);
+      const savedProfile = readJson<SavedProfile>(PROFILE_KEY);
+      if (savedProfile && !cancelled) {
+        setUserInfo(savedProfile);
+        void loadWalletItems(savedProfile.phone);
       }
       const savedTab = window.sessionStorage.getItem(ACTIVE_TAB_KEY);
       if ((savedTab === "spin" || savedTab === "rewards") && !cancelled) {
@@ -472,6 +462,9 @@ export default function PageContent() {
     phone: userInfo.phone.trim(),
   });
 
+  const isProfileValid = (profile: { name: string; phone: string }) =>
+    Boolean(profile.name && profile.phone && phoneRegex.test(profile.phone));
+
   async function submitSpin(
     name: string,
     phone: string,
@@ -542,6 +535,10 @@ export default function PageContent() {
       return setFormError("Chương trình quay thưởng đã kết thúc.");
     }
     const profile = readProfileFromState();
+    if (!profile.name || !profile.phone)
+      return setFormError("Vui lòng nhập đầy đủ họ tên và số điện thoại.");
+    if (!phoneRegex.test(profile.phone))
+      return setFormError("Vui lòng nhập số điện thoại Việt Nam hợp lệ.");
     const minInvoiceAmount = wheelData.minInvoiceAmount;
     let invoiceAmount: number | null = null;
     if (minInvoiceAmount != null) {
@@ -560,7 +557,7 @@ export default function PageContent() {
     if (isSpinning || dailyLimitReached || !storeCode || !wheelData.campaignOpen)
       return;
     const profile = readProfileFromState();
-    if (wheelData.minInvoiceAmount == null) {
+    if (isProfileValid(profile) && wheelData.minInvoiceAmount == null) {
       await submitSpin(profile.name, profile.phone);
       return;
     }
@@ -673,6 +670,7 @@ export default function PageContent() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f7ead1] text-[#571017]">
+      <VersionWatcher />
       <div
         className="absolute inset-0"
         style={{
@@ -1006,13 +1004,53 @@ export default function PageContent() {
 
       <RevealAnimation variant={revealAnimation} playing={showUnboxAnimation} />
 
-      {/* ─── MODAL HOÁ ĐƠN (chỉ hiện khi admin bật mức hoá đơn tối thiểu) ─── */}
+      {/* ─── MODAL THÔNG TIN NGƯỜI CHƠI ─── */}
       <Modal
         open={preSpinOpen}
-        title="Xác nhận hoá đơn"
+        title="Thông tin người chơi"
         onClose={() => !loading && setPreSpinOpen(false)}
       >
         <form onSubmit={handleSpinSubmit} className="space-y-4">
+          <div className="space-y-1">
+            <label className="ml-1 text-sm font-bold text-gray-700">
+              Họ và tên
+            </label>
+            <div className="relative">
+              <User
+                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type="text"
+                placeholder="Nguyễn Văn A"
+                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
+                value={userInfo.name}
+                onChange={(e) =>
+                  setUserInfo((prev) => ({ ...prev, name: e.target.value }))
+                }
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="ml-1 text-sm font-bold text-gray-700">
+              Số điện thoại
+            </label>
+            <div className="relative">
+              <Phone
+                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type="tel"
+                placeholder="0901234567"
+                className="w-full rounded-2xl border-2 border-gray-100 bg-gray-50 py-3 pl-12 pr-4 outline-none transition focus:border-[#d81b21]"
+                value={userInfo.phone}
+                onChange={(e) =>
+                  setUserInfo((prev) => ({ ...prev, phone: e.target.value }))
+                }
+              />
+            </div>
+          </div>
           {wheelData.minInvoiceAmount != null && (
             <div className="space-y-1">
               <label className="ml-1 text-sm font-bold text-gray-700">
