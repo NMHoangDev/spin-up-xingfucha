@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 
-import OpenInSafariBanner from "@/components/OpenInSafariBanner";
 import logoWebp from "@/assets/logo.webp";
 import RevealAnimation, {
   REVEAL_ANIMATION_RESULT_DELAY_MS,
@@ -693,7 +692,6 @@ export default function PageContent() {
       </div>
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[440px] flex-col px-4 pb-8 pt-4">
-        <OpenInSafariBanner />
         <header
           className="rounded-[30px] border border-white/70 p-4 shadow-[0_20px_40px_rgba(120,24,30,0.08)] backdrop-blur"
           style={{

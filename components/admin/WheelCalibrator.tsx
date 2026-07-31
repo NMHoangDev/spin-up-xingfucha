@@ -9,6 +9,15 @@ type SliceApi = {
   endAngle: number;
   prizeId: string | null;
 };
+type ThemeElement = {
+  id: string;
+  kind: "image" | "text" | "wheel_disk" | "pointer";
+  width: number | null;
+  distancePx: number | null;
+};
+
+const POINTER_EDGE_DISTANCE_PX = 8;
+const DEFAULT_DISK_WIDTH = 67.4;
 
 const SIZE = 320;
 const CENTER = SIZE / 2;
@@ -53,8 +62,63 @@ export default function WheelCalibrator({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [pointerElement, setPointerElement] = useState<ThemeElement | null>(null);
+  const [diskElement, setDiskElement] = useState<ThemeElement | null>(null);
+  const [pointerUpdating, setPointerUpdating] = useState(false);
+  const [pointerError, setPointerError] = useState<string | null>(null);
   const draggingRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  /** The pointer/disk are shared across every wheel face (not per-face), so
+   * this loads once and is independent of `load()`/`wheelFaceId` below. */
+  async function loadPointerElement() {
+    try {
+      const res = await fetch("/api/admin/theme/elements");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Không tải được vị trí mũi tên.");
+      const items: ThemeElement[] = json.items ?? [];
+      setPointerElement(items.find((e) => e.kind === "pointer") ?? null);
+      setDiskElement(items.find((e) => e.kind === "wheel_disk") ?? null);
+    } catch (e: any) {
+      setPointerError(e?.message ?? "Không tải được vị trí mũi tên.");
+    }
+  }
+
+  useEffect(() => {
+    void loadPointerElement();
+  }, []);
+
+  const wheelRadius = (diskElement?.width ?? DEFAULT_DISK_WIDTH) / 2;
+  const pointerCenterDistancePx = -wheelRadius;
+  const pointerMode: "edge" | "center" | "custom" =
+    pointerElement == null
+      ? "edge"
+      : Math.round(pointerElement.distancePx ?? -15) === POINTER_EDGE_DISTANCE_PX
+        ? "edge"
+        : Math.round(pointerElement.distancePx ?? -15) === Math.round(pointerCenterDistancePx)
+          ? "center"
+          : "custom";
+
+  async function setPointerMode(mode: "edge" | "center") {
+    if (!pointerElement) return;
+    setPointerError(null);
+    setPointerUpdating(true);
+    const distancePx = mode === "edge" ? POINTER_EDGE_DISTANCE_PX : pointerCenterDistancePx;
+    try {
+      const res = await fetch(`/api/admin/theme/elements/${pointerElement.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distancePx }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Cập nhật thất bại.");
+      setPointerElement(json);
+    } catch (e: any) {
+      setPointerError(e?.message ?? "Cập nhật thất bại.");
+    } finally {
+      setPointerUpdating(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -296,6 +360,47 @@ export default function WheelCalibrator({
             </button>
           )}
         </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 p-3">
+        <h2 className="text-sm font-semibold text-gray-900">Vị trí mũi tên</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Áp dụng cho mũi tên thật trên trang khách quay (không riêng mặt vòng
+          quay này). Đổi vị trí không ảnh hưởng đến việc xác định ô trúng khi
+          quay — vẫn chính xác như khi ở mép vòng.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void setPointerMode("edge")}
+            disabled={pointerUpdating || !pointerElement}
+            className={`h-9 rounded-lg border px-3 text-sm font-medium disabled:opacity-50 ${
+              pointerMode === "edge"
+                ? "border-gray-900 bg-gray-900 text-white"
+                : "border-gray-300 text-gray-700"
+            }`}
+          >
+            Mép vòng quay
+          </button>
+          <button
+            type="button"
+            onClick={() => void setPointerMode("center")}
+            disabled={pointerUpdating || !pointerElement}
+            className={`h-9 rounded-lg border px-3 text-sm font-medium disabled:opacity-50 ${
+              pointerMode === "center"
+                ? "border-gray-900 bg-gray-900 text-white"
+                : "border-gray-300 text-gray-700"
+            }`}
+          >
+            Giữa vòng quay
+          </button>
+          {pointerUpdating && (
+            <span className="self-center text-sm text-gray-500">Đang lưu...</span>
+          )}
+        </div>
+        {pointerError && (
+          <p className="mt-2 text-sm text-red-700">{pointerError}</p>
+        )}
       </div>
 
       {unmappedActivePrizes.length > 0 && (
