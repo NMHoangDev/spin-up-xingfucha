@@ -31,15 +31,26 @@ export default function VersionWatcher() {
     async function checkAndReload() {
       if (document.visibilityState !== "visible") return;
       const current = await fetchVersion();
-      if (current && versionRef.current && current !== versionRef.current) {
-        window.location.reload();
+      if (!current) return;
+      // No baseline yet — the load-time fetch raced us or failed outright
+      // (offline on a phone is routine). Adopt this reading as the baseline
+      // instead of returning, otherwise a single failed first fetch would
+      // leave the ref null and this watcher dead for the whole session.
+      if (!versionRef.current) {
+        versionRef.current = current;
+        return;
       }
+      if (current !== versionRef.current) window.location.reload();
     }
 
+    // `focus` covers the cases visibilitychange misses — desktop window
+    // switching, and browsers that keep a backgrounded tab "visible".
     document.addEventListener("visibilitychange", checkAndReload);
+    window.addEventListener("focus", checkAndReload);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", checkAndReload);
+      window.removeEventListener("focus", checkAndReload);
     };
   }, []);
 
