@@ -809,11 +809,29 @@ export default function ThemeDesignerPage() {
                           className={DARK_INPUT}
                         />
                         {selected.kind === "pointer" && (
-                          <p className="text-[10px] leading-4 text-[#5b5856]">
-                            Chỉ xoay hình mũi tên tại chỗ — không đổi vị trí
-                            quanh vòng quay (dùng &quot;Góc quanh vòng
-                            quay&quot; bên dưới cho việc đó).
-                          </p>
+                          <>
+                            <div className="flex gap-1.5">
+                              {[0, 90, 180, 270].map((deg) => (
+                                <button
+                                  key={deg}
+                                  type="button"
+                                  onClick={() => updateElementLocal(selected.id, { rotation: deg })}
+                                  className={`flex-1 rounded-lg border px-2 py-1 text-xs font-semibold transition-colors ${
+                                    Math.round(selected.rotation) === deg
+                                      ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
+                                      : "border-[#353534] bg-[#131313] text-[#c8c5c4] hover:border-[#d81b21]/50"
+                                  }`}
+                                >
+                                  {deg}°
+                                </button>
+                              ))}
+                            </div>
+                            <p className="text-[10px] leading-4 text-[#5b5856]">
+                              Chỉ xoay hình mũi tên tại chỗ — không đổi vị trí
+                              quanh vòng quay (dùng &quot;Góc quanh vòng
+                              quay&quot; bên dưới cho việc đó).
+                            </p>
+                          </>
                         )}
                       </div>
                     )}
@@ -835,7 +853,12 @@ export default function ThemeDesignerPage() {
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => updateElementLocal(selected.id, { distancePx: pointerEdgeDistancePx })}
+                              onClick={() =>
+                                updateElementLocal(selected.id, {
+                                  distancePx: pointerEdgeDistancePx,
+                                  rotation: 180,
+                                })
+                              }
                               className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
                                 Math.round(selected.distancePx ?? -15) === pointerEdgeDistancePx
                                   ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
@@ -846,7 +869,12 @@ export default function ThemeDesignerPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => updateElementLocal(selected.id, { distancePx: pointerCenterDistancePx })}
+                              onClick={() =>
+                                updateElementLocal(selected.id, {
+                                  distancePx: pointerCenterDistancePx,
+                                  rotation: 0,
+                                })
+                              }
                               className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${
                                 Math.round(selected.distancePx ?? -15) === Math.round(pointerCenterDistancePx)
                                   ? "border-[#d81b21] bg-[#d81b21]/10 text-[#d81b21]"
@@ -863,10 +891,12 @@ export default function ThemeDesignerPage() {
                             className={DARK_INPUT}
                           />
                           <p className="text-[10px] leading-4 text-[#5b5856]">
-                            Chọn nhanh 1 trong 2 nút trên, hoặc gõ số tay: dùng
-                            khoảng <strong>−15 đến +15</strong> để mũi tên nằm
-                            sát viền vòng quay — quan sát canvas bên trái khi
-                            gõ số để chỉnh cho đúng mắt.
+                            2 nút trên cũng tự xoay hình về đúng hướng (mép =
+                            180°, giữa = 0°) — gõ số tay ở ô &quot;Xoay hình
+                            ảnh&quot; bên trên nếu muốn hướng khác. Khoảng cách
+                            gõ tay: dùng <strong>−15 đến +15</strong> để mũi
+                            tên nằm sát viền vòng quay — quan sát canvas bên
+                            trái khi gõ số để chỉnh cho đúng mắt.
                           </p>
                         </div>
                         <div className="col-span-2 space-y-1">

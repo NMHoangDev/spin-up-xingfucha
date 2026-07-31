@@ -14,9 +14,13 @@ type ThemeElement = {
   kind: "image" | "text" | "wheel_disk" | "pointer";
   width: number | null;
   distancePx: number | null;
+  rotation: number;
 };
 
 const POINTER_EDGE_DISTANCE_PX = 8;
+const POINTER_EDGE_ROTATION = 180;
+const POINTER_CENTER_ROTATION = 0;
+const POINTER_ROTATION_PRESETS = [0, 90, 180, 270];
 const DEFAULT_DISK_WIDTH = 67.4;
 
 const SIZE = 320;
@@ -99,16 +103,15 @@ export default function WheelCalibrator({
           ? "center"
           : "custom";
 
-  async function setPointerMode(mode: "edge" | "center") {
+  async function patchPointer(patch: { distancePx?: number; rotation?: number }) {
     if (!pointerElement) return;
     setPointerError(null);
     setPointerUpdating(true);
-    const distancePx = mode === "edge" ? POINTER_EDGE_DISTANCE_PX : pointerCenterDistancePx;
     try {
       const res = await fetch(`/api/admin/theme/elements/${pointerElement.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ distancePx }),
+        body: JSON.stringify(patch),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Cập nhật thất bại.");
@@ -118,6 +121,16 @@ export default function WheelCalibrator({
     } finally {
       setPointerUpdating(false);
     }
+  }
+
+  /** Bundles the rotation that matches each position — at the rim the tip
+   * should point inward at the wheel (180°), at dead center there's no rim
+   * to point at anymore so the badge sits in its default artwork
+   * orientation (0°). Manual rotation below can still override this. */
+  async function setPointerMode(mode: "edge" | "center") {
+    const distancePx = mode === "edge" ? POINTER_EDGE_DISTANCE_PX : pointerCenterDistancePx;
+    const rotation = mode === "edge" ? POINTER_EDGE_ROTATION : POINTER_CENTER_ROTATION;
+    await patchPointer({ distancePx, rotation });
   }
 
   async function load() {
@@ -397,6 +410,28 @@ export default function WheelCalibrator({
           {pointerUpdating && (
             <span className="self-center text-sm text-gray-500">Đang lưu...</span>
           )}
+        </div>
+
+        <p className="mt-3 text-sm text-gray-600">
+          Xoay hướng mũi tên (đổi mép/giữa ở trên đã tự xoay về hướng đúng —
+          dùng phần này nếu muốn hướng khác):
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {POINTER_ROTATION_PRESETS.map((deg) => (
+            <button
+              key={deg}
+              type="button"
+              onClick={() => void patchPointer({ rotation: deg })}
+              disabled={pointerUpdating || !pointerElement}
+              className={`h-9 rounded-lg border px-3 text-sm font-medium disabled:opacity-50 ${
+                pointerElement && Math.round(pointerElement.rotation) === deg
+                  ? "border-gray-900 bg-gray-900 text-white"
+                  : "border-gray-300 text-gray-700"
+              }`}
+            >
+              {deg}°
+            </button>
+          ))}
         </div>
         {pointerError && (
           <p className="mt-2 text-sm text-red-700">{pointerError}</p>
